@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		66EE223F2F815557002F2216 /* PScanKit in Frameworks */ = {isa = PBXBuildFile; productRef = 66EE223E2F815557002F2216 /* PScanKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		66EE22052F814C86002F2216 /* pscan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = pscan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				66EE223F2F815557002F2216 /* PScanKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = pscan;
 			packageProductDependencies = (
+				66EE223E2F815557002F2216 /* PScanKit */,
 			);
 			productName = pscan;
 			productReference = 66EE22052F814C86002F2216 /* pscan.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = 66EE21FC2F814C86002F2216;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				66EE223D2F815557002F2216 /* XCLocalSwiftPackageReference "../pscan" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 66EE22062F814C86002F2216 /* Products */;
 			projectDirPath = "";
@@ -333,6 +342,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		66EE223D2F815557002F2216 /* XCLocalSwiftPackageReference "../pscan" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../pscan;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		66EE223E2F815557002F2216 /* PScanKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PScanKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 66EE21FD2F814C86002F2216 /* Project object */;
 }
