@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    var scanner: PortScanner
+    var scanner: AppPortScanner
     @Binding var showAll: Bool
 
     private var visiblePorts: [PortInfo] {
@@ -77,7 +77,7 @@ struct ContentView: View {
 
 struct PortRow: View {
     let port: PortInfo
-    var scanner: PortScanner
+    var scanner: AppPortScanner
     @State private var showKillConfirm = false
     @AppStorage("showKillButton") private var showKill = true
     @AppStorage("showFinderButton") private var showFinder = true

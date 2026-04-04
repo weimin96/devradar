@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct pscanApp: App {
-    @State private var scanner = PortScanner()
+    @State private var scanner = AppPortScanner()
     @AppStorage("showAllPorts") private var showAll = false
 
     private var activeCount: Int {
