@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.webp" width="128" />
+  <img src="icon.png" width="128" />
 </p>
 
 <h1 align="center">pscan</h1>
