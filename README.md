@@ -32,7 +32,7 @@
 
 ### Menu Bar App
 
-Download the latest `.zip` from [Releases](https://github.com/mavideniz/pscan/releases/latest), unzip, and move `pscan.app` to Applications.
+Download the latest `.zip` from [Releases](https://github.com/mavideniz/pscan/releases/latest) or [World Vibe Web](https://wvw.dev), unzip, and move `pscan.app` to Applications.
 
 ### CLI
 
