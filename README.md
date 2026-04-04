@@ -14,6 +14,10 @@
 
 ---
 
+<p align="center">
+  <img src="screenshot.png" width="420" />
+</p>
+
 ## Features
 
 - See active dev server ports at a glance from the menu bar
