@@ -54,7 +54,7 @@ struct ContentView: View {
         if showAll {
             return scanner.ports
         }
-        return scanner.ports.filter { $0.projectDirectory != nil }
+        return scanner.ports.filter(\.isDevelopmentService)
     }
 
     private var filteredPorts: [PortInfo] {
@@ -68,6 +68,10 @@ struct ContentView: View {
                 port.directory,
                 port.runtimeName,
                 port.processName,
+                port.serviceName,
+                port.containerName,
+                port.composeProject,
+                port.composeService,
                 port.command,
                 String(port.port),
                 String(port.pid),
@@ -78,7 +82,16 @@ struct ContentView: View {
 
     private var groups: [ServiceGroup] {
         let grouped = Dictionary(grouping: filteredPorts) { port in
-            port.projectDirectory ?? "pid:\(port.pid)"
+            if let projectDirectory = port.projectDirectory {
+                return projectDirectory
+            }
+            if let composeProject = port.composeProject {
+                return "compose:\(composeProject)"
+            }
+            if let containerID = port.containerID {
+                return "docker:\(containerID)"
+            }
+            return "pid:\(port.pid)"
         }
 
         let result = grouped.map { key, ports in
@@ -408,14 +421,26 @@ private struct ServiceRow: View {
                 HStack(spacing: 6) {
                     Text(port.runtimeName)
                         .font(.caption)
+                    if let serviceName = port.serviceName,
+                       serviceName.caseInsensitiveCompare(port.projectName ?? "") != .orderedSame {
+                        Text(serviceName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if port.processName.caseInsensitiveCompare(port.runtimeName) != .orderedSame {
                         Text(port.processName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Text("PID \(port.pid)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    if port.pid > 0 {
+                        Text("PID \(port.pid)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else if let containerName = port.containerName {
+                        Text(containerName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if let command = port.command {
@@ -438,19 +463,28 @@ private struct ServiceRow: View {
                         .font(.system(size: 14))
                         .foregroundStyle(.secondary)
                 }
-                .help("停止进程")
+                .help(port.containerID == nil ? "停止进程" : "停止容器")
             }
 
             Menu {
-                Button("停止") {
-                    scanner.stop(port: port, mode: .terminate)
-                }
-                Button("停止进程树") {
-                    scanner.stop(port: port, mode: .processTree)
-                }
-                Divider()
-                Button("强制停止", role: .destructive) {
-                    scanner.stop(port: port, mode: .force)
+                if port.containerID != nil {
+                    Button("停止容器") {
+                        scanner.stop(port: port, mode: .terminate)
+                    }
+                    Button("强制停止容器", role: .destructive) {
+                        scanner.stop(port: port, mode: .force)
+                    }
+                } else {
+                    Button("停止") {
+                        scanner.stop(port: port, mode: .terminate)
+                    }
+                    Button("停止进程树") {
+                        scanner.stop(port: port, mode: .processTree)
+                    }
+                    Divider()
+                    Button("强制停止", role: .destructive) {
+                        scanner.stop(port: port, mode: .force)
+                    }
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -464,14 +498,23 @@ private struct ServiceRow: View {
         }
         .contentShape(Rectangle())
         .contextMenu {
-            Button("停止") {
-                scanner.stop(port: port, mode: .terminate)
-            }
-            Button("停止进程树") {
-                scanner.stop(port: port, mode: .processTree)
-            }
-            Button("强制停止", role: .destructive) {
-                scanner.stop(port: port, mode: .force)
+            if port.containerID != nil {
+                Button("停止容器") {
+                    scanner.stop(port: port, mode: .terminate)
+                }
+                Button("强制停止容器", role: .destructive) {
+                    scanner.stop(port: port, mode: .force)
+                }
+            } else {
+                Button("停止") {
+                    scanner.stop(port: port, mode: .terminate)
+                }
+                Button("停止进程树") {
+                    scanner.stop(port: port, mode: .processTree)
+                }
+                Button("强制停止", role: .destructive) {
+                    scanner.stop(port: port, mode: .force)
+                }
             }
         }
     }

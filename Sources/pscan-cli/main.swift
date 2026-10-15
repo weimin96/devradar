@@ -7,7 +7,7 @@ func printUsage() {
     print("Options:")
     print("  -a, --all       Show all ports (including system services)")
     print("  -j, --json      Output as JSON")
-    print("  -k, --kill PORT Kill the process on the given port")
+    print("  -k, --kill PORT Stop the service on a given port")
     print("  -h, --help      Show this help")
     print("")
 }
@@ -44,23 +44,26 @@ while let arg = argIterator.next() {
 
 let ports = scanner.fetchPorts(includeAll: showAll)
 
-// Kill mode
+// Stop mode
 if let killPort {
     guard let target = scanner.fetchPorts(includeAll: true).first(where: { $0.port == killPort }) else {
         print("No process found on port \(killPort)")
         exit(1)
     }
 
-    print("Kill \(target.processName) (PID: \(target.pid)) on :\(target.port)? [y/N] ", terminator: "")
+    let targetName = target.serviceName ?? target.containerName ?? target.processName
+    let targetDetail = target.containerID != nil ? "container" : "PID \(target.pid)"
+    print("Stop \(targetName) (\(targetDetail)) on :\(target.port)? [y/N] ", terminator: "")
     fflush(stdout)
 
     if let answer = readLine()?.lowercased(), answer == "y" || answer == "yes" {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/kill")
-        task.arguments = [String(target.pid)]
-        try? task.run()
-        task.waitUntilExit()
-        print("Killed.")
+        do {
+            try scanner.stop(target, mode: .terminate)
+            print("Stopped.")
+        } catch {
+            print("Error: \(error.localizedDescription)")
+            exit(1)
+        }
     } else {
         print("Cancelled.")
     }
@@ -77,6 +80,11 @@ if jsonOutput {
         ]
         if let dir = port.directory { dict["directory"] = dir }
         if let name = port.projectName { dict["project"] = name }
+        if let serviceName = port.serviceName { dict["service"] = serviceName }
+        if let containerID = port.containerID { dict["containerId"] = containerID }
+        if let containerName = port.containerName { dict["container"] = containerName }
+        if let composeProject = port.composeProject { dict["composeProject"] = composeProject }
+        if let composeService = port.composeService { dict["composeService"] = composeService }
         dict["runtime"] = port.runtimeName
         if let command = port.command { dict["command"] = command }
         if let executable = port.executable { dict["executable"] = executable }

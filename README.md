@@ -23,6 +23,9 @@
 - See active development processes and ports at a glance from the menu bar
 - Group multiple listening ports by project
 - Project and Git worktree detection
+- Spring Boot service-name detection via `spring.application.name`
+- Docker published-port mapping with Compose project/service metadata
+- Supervisor-aware stop for PM2, nodemon, npm, and pnpm process trees
 - CPU, memory, and uptime summaries
 - Search by project, port, PID, runtime, path, or command
 - Switch between development services and all listening ports from the menu bar
@@ -69,7 +72,7 @@ PORT    PROCESS       PROJECT               DIRECTORY
 |------|-------------|
 | `-a, --all` | Show all ports including system services |
 | `-j, --json` | Output as JSON |
-| `-k, --kill PORT` | Kill the process on a given port |
+| `-k, --kill PORT` | Stop the service on a given port (supervisor/container aware) |
 | `-h, --help` | Show help |
 
 ## Requirements

@@ -13,7 +13,11 @@ struct pscanApp: App {
     }
 
     private var activeCount: Int {
-        Set(scanner.ports.filter { $0.projectDirectory != nil }.map(\.pid)).count
+        Set(
+            scanner.ports
+                .filter(\.isDevelopmentService)
+                .map { $0.containerID ?? "pid:\($0.pid)" }
+        ).count
     }
 
     var body: some Scene {
