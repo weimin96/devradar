@@ -1,12 +1,19 @@
+import PScanKit
 import SwiftUI
 
 @main
 struct pscanApp: App {
-    @State private var scanner = AppPortScanner()
+    @State private var scanner: AppPortScanner
     @AppStorage("showAllPorts") private var showAll = false
 
+    init() {
+        let scanner = AppPortScanner()
+        _scanner = State(initialValue: scanner)
+        scanner.startScanning()
+    }
+
     private var activeCount: Int {
-        scanner.ports.filter { $0.directory != nil }.count
+        scanner.ports.filter { $0.projectDirectory != nil }.count
     }
 
     var body: some Scene {

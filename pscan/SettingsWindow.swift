@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SettingsWindow {
     static func open() {
-        let windowRef = NSApp.windows.first { $0.title == "pscan Options" }
+        let windowRef = NSApp.windows.first { $0.title == "pscan 设置" }
         if let window = windowRef {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -18,7 +18,7 @@ struct SettingsWindow {
             backing: .buffered,
             defer: false
         )
-        window.title = "pscan Options"
+        window.title = "pscan 设置"
         window.contentView = hostingView
         window.center()
         window.isReleasedWhenClosed = false
@@ -37,8 +37,8 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section("General") {
-                    Toggle("Launch at login", isOn: $launchAtLogin)
+                Section("通用") {
+                    Toggle("登录时启动", isOn: $launchAtLogin)
                         .onChange(of: launchAtLogin) { _, newValue in
                             do {
                                 if newValue {
@@ -50,13 +50,13 @@ struct SettingsView: View {
                                 launchAtLogin = !newValue
                             }
                         }
-                    Toggle("Show all ports", isOn: $showAll)
+                    Toggle("显示所有端口", isOn: $showAll)
                 }
 
-                Section("Actions") {
-                    Toggle("Kill process button", isOn: $showKill)
-                    Toggle("Open in Finder button", isOn: $showFinder)
-                    Toggle("Open in Terminal button", isOn: $showTerminal)
+                Section("操作") {
+                    Toggle("显示停止按钮", isOn: $showKill)
+                    Toggle("显示 Finder 按钮", isOn: $showFinder)
+                    Toggle("显示终端按钮", isOn: $showTerminal)
                 }
             }
             .formStyle(.grouped)
@@ -66,7 +66,7 @@ struct SettingsView: View {
             VStack(spacing: 4) {
                 Text("pscan")
                     .font(.headline)
-                Text("Lightweight menu bar port monitor")
+                Text("轻量级开发进程与端口管理")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 3) {
