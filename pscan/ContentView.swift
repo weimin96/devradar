@@ -3,35 +3,6 @@ import PScanKit
 import SwiftUI
 
 private enum RuntimeVisual {
-    static func color(for port: PortInfo) -> Color {
-        let runtime = port.runtimeName.lowercased()
-        if port.containerID != nil || runtime.contains("docker") {
-            return Color(nsColor: .systemBlue)
-        }
-        if runtime.contains("spring") {
-            return Color(nsColor: .systemGreen)
-        }
-        if runtime.contains("java") {
-            return Color(nsColor: .systemOrange)
-        }
-        if runtime.contains("vite") || runtime.contains("nuxt") {
-            return Color(nsColor: .systemPurple)
-        }
-        if runtime.contains("next") {
-            return Color(nsColor: .labelColor)
-        }
-        if runtime.contains("node") {
-            return Color(nsColor: .systemGreen)
-        }
-        if runtime.contains("python") || runtime.contains("uvicorn") || runtime.contains("gunicorn") || runtime.contains("flask") {
-            return Color(nsColor: .systemIndigo)
-        }
-        if runtime.contains("ruby") {
-            return Color(nsColor: .systemRed)
-        }
-        return Color.accentColor
-    }
-
     static func icon(for port: PortInfo) -> String {
         let runtime = port.runtimeName.lowercased()
         if port.containerID != nil || runtime.contains("docker") { return "shippingbox.fill" }
@@ -85,10 +56,6 @@ private struct ServiceGroup: Identifiable {
         processes.compactMap(\.uptimeSeconds).max()
     }
 
-    var tint: Color {
-        guard let first = ports.first else { return .accentColor }
-        return RuntimeVisual.color(for: first)
-    }
 }
 
 struct ContentView: View {
@@ -196,10 +163,10 @@ struct ContentView: View {
                 if !visiblePorts.isEmpty {
                     Text("\(groups.count) 项目 · \(filteredPorts.count) 端口")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Color.accentColor.opacity(0.10))
+                        .background(.quaternary.opacity(0.7))
                         .clipShape(Capsule())
                 }
                 Spacer()
@@ -376,10 +343,6 @@ private struct ServiceGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
-                Circle()
-                    .fill(group.tint)
-                    .frame(width: 7, height: 7)
-
                 Text(group.name)
                     .font(.system(.body, weight: .semibold))
                     .lineLimit(1)
@@ -387,10 +350,10 @@ private struct ServiceGroupView: View {
                 if group.ports.count > 1 {
                     Text("\(group.ports.count) 端口")
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(group.tint)
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
-                        .background(group.tint.opacity(0.11))
+                        .background(.quaternary.opacity(0.7))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
 
@@ -402,7 +365,7 @@ private struct ServiceGroupView: View {
                             openTerminal(at: directory)
                         } label: {
                             Image(systemName: "terminal")
-                                .foregroundStyle(group.tint)
+                                .foregroundStyle(.secondary)
                         }
                         .help("在终端中打开项目")
                     }
@@ -447,7 +410,7 @@ private struct ServiceGroupView: View {
                     MetricPill(
                         text: formatUptime(uptime),
                         systemImage: "clock",
-                        color: Color(nsColor: .systemTeal)
+                        color: .secondary
                     )
                 }
             }
@@ -461,7 +424,7 @@ private struct ServiceGroupView: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(group.tint.opacity(isHovered ? 0.055 : 0))
+        .background(Color.primary.opacity(isHovered ? 0.035 : 0))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
     }
@@ -480,13 +443,13 @@ private struct ServiceGroupView: View {
     private func cpuColor(_ value: Double) -> Color {
         if value >= 80 { return Color(nsColor: .systemRed) }
         if value >= 40 { return Color(nsColor: .systemOrange) }
-        return Color(nsColor: .systemGreen)
+        return .secondary
     }
 
     private func memoryColor(_ value: UInt64) -> Color {
         if value >= 2 * 1_024 * 1_024 * 1_024 { return Color(nsColor: .systemRed) }
         if value >= 1_024 * 1_024 * 1_024 { return Color(nsColor: .systemOrange) }
-        return Color(nsColor: .systemIndigo)
+        return .secondary
     }
 }
 
@@ -501,7 +464,7 @@ private struct MetricPill: View {
             .foregroundStyle(color)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
-            .background(color.opacity(0.085))
+            .background(Color.primary.opacity(0.045))
             .clipShape(Capsule())
     }
 }
@@ -512,10 +475,6 @@ private struct ServiceRow: View {
     @AppStorage("showKillButton") private var showKill = true
     @State private var isHovered = false
 
-    private var tint: Color {
-        RuntimeVisual.color(for: port)
-    }
-
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Button {
@@ -525,10 +484,10 @@ private struct ServiceRow: View {
             } label: {
                 Text(":\(port.port)")
                     .font(.system(.caption, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(tint.opacity(0.105))
+                    .background(.quaternary.opacity(0.72))
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -538,7 +497,7 @@ private struct ServiceRow: View {
                 HStack(spacing: 6) {
                     Label(port.runtimeName, systemImage: RuntimeVisual.icon(for: port))
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(tint)
+                        .foregroundStyle(.secondary)
                     if let serviceName = port.serviceName,
                        serviceName.caseInsensitiveCompare(port.projectName ?? "") != .orderedSame {
                         Text(serviceName)
@@ -579,7 +538,7 @@ private struct ServiceRow: View {
                 } label: {
                     Image(systemName: "stop.circle")
                         .font(.system(size: 14))
-                        .foregroundStyle(Color(nsColor: .systemRed))
+                        .foregroundStyle(isHovered ? Color(nsColor: .systemRed) : Color.secondary)
                         .padding(3)
                         .background(Color(nsColor: .systemRed).opacity(isHovered ? 0.12 : 0))
                         .clipShape(Circle())
@@ -619,7 +578,7 @@ private struct ServiceRow: View {
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
-        .background(tint.opacity(isHovered ? 0.045 : 0))
+        .background(Color.primary.opacity(isHovered ? 0.03 : 0))
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
