@@ -203,6 +203,7 @@ struct ContentView: View {
                     }
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(Color.accentColor.opacity(0.72))
                 }
                 .buttonStyle(.borderless)
                 .menuStyle(.borderlessButton)
@@ -219,6 +220,7 @@ struct ContentView: View {
                         scanner.scan()
                     } label: {
                         Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(Color.accentColor.opacity(0.72))
                     }
                     .buttonStyle(.borderless)
                     .help("刷新")
@@ -365,7 +367,7 @@ private struct ServiceGroupView: View {
                             openTerminal(at: directory)
                         } label: {
                             Image(systemName: "terminal")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.accentColor.opacity(0.78))
                         }
                         .help("在终端中打开项目")
                     }
@@ -375,7 +377,7 @@ private struct ServiceGroupView: View {
                             NSWorkspace.shared.open(URL(fileURLWithPath: directory))
                         } label: {
                             Image(systemName: "folder")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.accentColor.opacity(0.62))
                         }
                         .help("在 Finder 中打开项目")
                     }
@@ -443,13 +445,13 @@ private struct ServiceGroupView: View {
     private func cpuColor(_ value: Double) -> Color {
         if value >= 80 { return Color(nsColor: .systemRed) }
         if value >= 40 { return Color(nsColor: .systemOrange) }
-        return .secondary
+        return Color(nsColor: .systemGreen)
     }
 
     private func memoryColor(_ value: UInt64) -> Color {
         if value >= 2 * 1_024 * 1_024 * 1_024 { return Color(nsColor: .systemRed) }
         if value >= 1_024 * 1_024 * 1_024 { return Color(nsColor: .systemOrange) }
-        return .secondary
+        return Color(nsColor: .systemGreen)
     }
 }
 
@@ -464,7 +466,7 @@ private struct MetricPill: View {
             .foregroundStyle(color)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
-            .background(Color.primary.opacity(0.045))
+            .background(color.opacity(0.07))
             .clipShape(Capsule())
     }
 }
@@ -484,10 +486,10 @@ private struct ServiceRow: View {
             } label: {
                 Text(":\(port.port)")
                     .font(.system(.caption, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color.accentColor.opacity(0.82))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(.quaternary.opacity(0.72))
+                    .background(Color.accentColor.opacity(0.055))
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -538,9 +540,9 @@ private struct ServiceRow: View {
                 } label: {
                     Image(systemName: "stop.circle")
                         .font(.system(size: 14))
-                        .foregroundStyle(isHovered ? Color(nsColor: .systemRed) : Color.secondary)
+                        .foregroundStyle(Color(nsColor: .systemRed).opacity(isHovered ? 0.95 : 0.62))
                         .padding(3)
-                        .background(Color(nsColor: .systemRed).opacity(isHovered ? 0.12 : 0))
+                        .background(Color(nsColor: .systemRed).opacity(isHovered ? 0.10 : 0))
                         .clipShape(Circle())
                 }
                 .help(port.containerID == nil ? "停止进程" : "停止容器")
