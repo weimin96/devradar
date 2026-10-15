@@ -13,7 +13,7 @@ struct pscanApp: App {
     }
 
     private var activeCount: Int {
-        scanner.ports.filter { $0.projectDirectory != nil }.count
+        Set(scanner.ports.filter { $0.projectDirectory != nil }.map(\.pid)).count
     }
 
     var body: some Scene {

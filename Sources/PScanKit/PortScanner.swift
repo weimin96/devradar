@@ -10,14 +10,34 @@ public struct PortInfo: Identifiable, Hashable, Sendable {
     public let command: String?
     public let executable: String?
     public let projectDirectory: String?
-
-    public var projectName: String? {
-        guard let projectDirectory else { return nil }
-        return URL(fileURLWithPath: projectDirectory).lastPathComponent
-    }
+    public let projectName: String?
+    public let cpuPercent: Double?
+    public let memoryBytes: UInt64?
+    public let uptimeSeconds: Int?
 
     public var runtimeName: String {
         let text = "\(processName) \(executable ?? "") \(command ?? "")".lowercased()
+        if text.contains("spring-boot") || text.contains("org.springframework.boot") {
+            return "Spring Boot"
+        }
+        if text.contains("vite") {
+            return "Vite"
+        }
+        if text.contains("next dev") || text.contains("/next") {
+            return "Next.js"
+        }
+        if text.contains("nuxt") {
+            return "Nuxt"
+        }
+        if text.contains("uvicorn") {
+            return "Uvicorn"
+        }
+        if text.contains("gunicorn") {
+            return "Gunicorn"
+        }
+        if text.contains("flask") {
+            return "Flask"
+        }
         if text.contains("java") || text.contains("gradle") || text.contains("maven") {
             return "Java"
         }
@@ -55,6 +75,13 @@ public enum PortScannerError: LocalizedError, Sendable {
 }
 
 public final class PortScanner: @unchecked Sendable {
+    private struct ProcessSnapshot {
+        let command: String?
+        let cpuPercent: Double?
+        let memoryBytes: UInt64?
+        let uptimeSeconds: Int?
+    }
+
     public init() {}
 
     public func fetchPorts(includeAll: Bool = false, excludingPIDs: Set<Int> = []) -> [PortInfo] {
@@ -100,18 +127,24 @@ public final class PortScanner: @unchecked Sendable {
 
             let pids = Array(Set(rawPorts.map(\.pid)))
             let directories = Self.workingDirectories(for: pids)
-            let commands = Self.processCommands(for: pids)
+            let snapshots = Self.processSnapshots(for: pids)
 
             var results = rawPorts.map { raw in
                 let directory = directories[raw.pid]
+                let projectDirectory = Self.projectDirectory(from: directory)
+                let snapshot = snapshots[raw.pid]
                 return PortInfo(
                     port: raw.port,
                     processName: raw.processName,
                     pid: raw.pid,
                     directory: directory,
-                    command: commands[raw.pid],
+                    command: snapshot?.command,
                     executable: Self.executablePath(for: raw.pid),
-                    projectDirectory: Self.projectDirectory(from: directory)
+                    projectDirectory: projectDirectory,
+                    projectName: Self.projectName(for: projectDirectory),
+                    cpuPercent: snapshot?.cpuPercent,
+                    memoryBytes: snapshot?.memoryBytes,
+                    uptimeSeconds: snapshot?.uptimeSeconds
                 )
             }
 
@@ -253,6 +286,39 @@ public final class PortScanner: @unchecked Sendable {
         }
     }
 
+    private static func projectName(for projectDirectory: String?) -> String? {
+        guard let projectDirectory else { return nil }
+
+        let root = URL(fileURLWithPath: projectDirectory).standardizedFileURL
+        let gitEntry = root.appendingPathComponent(".git")
+        var isDirectory = ObjCBool(false)
+
+        if FileManager.default.fileExists(atPath: gitEntry.path, isDirectory: &isDirectory), !isDirectory.boolValue,
+           let contents = try? String(contentsOf: gitEntry, encoding: .utf8),
+           let firstLine = contents.split(whereSeparator: { $0.isNewline }).first {
+            let line = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("gitdir:") {
+                let rawPath = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+                let gitDirectory: URL
+                if rawPath.hasPrefix("/") {
+                    gitDirectory = URL(fileURLWithPath: rawPath).standardizedFileURL
+                } else {
+                    gitDirectory = root.appendingPathComponent(rawPath).standardizedFileURL
+                }
+
+                if let range = gitDirectory.path.range(of: "/.git/worktrees/") {
+                    let mainRepositoryPath = String(gitDirectory.path[..<range.lowerBound])
+                    let name = URL(fileURLWithPath: mainRepositoryPath).lastPathComponent
+                    if !name.isEmpty {
+                        return name
+                    }
+                }
+            }
+        }
+
+        return root.lastPathComponent
+    }
+
     private static func processValue(pid: Int, field: String) -> String? {
         let task = Process()
         let pipe = Pipe()
@@ -275,13 +341,20 @@ public final class PortScanner: @unchecked Sendable {
         }
     }
 
-    private static func processCommands(for pids: [Int]) -> [Int: String] {
+    private static func processSnapshots(for pids: [Int]) -> [Int: ProcessSnapshot] {
         guard !pids.isEmpty else { return [:] }
 
         let task = Process()
         let pipe = Pipe()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
-        task.arguments = ["-p", pids.map(String.init).joined(separator: ","), "-o", "pid=", "-o", "command="]
+        task.arguments = [
+            "-p", pids.map(String.init).joined(separator: ","),
+            "-o", "pid=",
+            "-o", "%cpu=",
+            "-o", "rss=",
+            "-o", "etime=",
+            "-o", "command=",
+        ]
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
 
@@ -291,23 +364,57 @@ public final class PortScanner: @unchecked Sendable {
             task.waitUntilExit()
 
             let output = String(decoding: data, as: UTF8.self)
-            var result: [Int: String] = [:]
+            var result: [Int: ProcessSnapshot] = [:]
             for line in output.components(separatedBy: "\n") {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty,
-                      let separator = trimmed.firstIndex(where: { $0.isWhitespace }),
-                      let pid = Int(trimmed[..<separator]) else {
+                let columns = trimmed.split(
+                    maxSplits: 4,
+                    omittingEmptySubsequences: true,
+                    whereSeparator: { $0.isWhitespace }
+                )
+                guard columns.count >= 4, let pid = Int(columns[0]) else {
                     continue
                 }
-                let command = trimmed[separator...].trimmingCharacters(in: .whitespaces)
-                if !command.isEmpty {
-                    result[pid] = command
-                }
+
+                let cpuPercent = Double(columns[1])
+                let memoryBytes = UInt64(columns[2]).map { $0 * 1024 }
+                let uptimeSeconds = parseElapsedTime(String(columns[3]))
+                let command = columns.count == 5 ? String(columns[4]) : nil
+
+                result[pid] = ProcessSnapshot(
+                    command: command,
+                    cpuPercent: cpuPercent,
+                    memoryBytes: memoryBytes,
+                    uptimeSeconds: uptimeSeconds
+                )
             }
             return result
         } catch {
             return [:]
         }
+    }
+
+    private static func parseElapsedTime(_ value: String) -> Int? {
+        let dayParts = value.split(separator: "-", maxSplits: 1)
+        let days: Int
+        let timePart: Substring
+
+        if dayParts.count == 2 {
+            guard let parsedDays = Int(dayParts[0]) else { return nil }
+            days = parsedDays
+            timePart = dayParts[1]
+        } else {
+            days = 0
+            timePart = dayParts[0]
+        }
+
+        let components = timePart.split(separator: ":").compactMap { Int($0) }
+        guard components.count == 2 || components.count == 3 else { return nil }
+
+        let hours = components.count == 3 ? components[0] : 0
+        let minutes = components.count == 3 ? components[1] : components[0]
+        let seconds = components.count == 3 ? components[2] : components[1]
+        return days * 86_400 + hours * 3_600 + minutes * 60 + seconds
     }
 
     private static func executablePath(for pid: Int) -> String? {

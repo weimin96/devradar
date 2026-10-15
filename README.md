@@ -20,11 +20,13 @@
 
 ## Features
 
-- See active dev server ports at a glance from the menu bar
-- Project name and directory detection
+- See active development processes and ports at a glance from the menu bar
+- Group multiple listening ports by project
+- Project and Git worktree detection
+- CPU, memory, and uptime summaries
 - Open in browser, Terminal, or Finder with one click
-- Kill processes with confirmation
-- Active port count badge
+- Stop, force-stop, or terminate a managed process tree
+- Active development process count badge
 - Launch at login
 - Configurable via Options window
 

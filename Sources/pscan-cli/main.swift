@@ -77,6 +77,12 @@ if jsonOutput {
         ]
         if let dir = port.directory { dict["directory"] = dir }
         if let name = port.projectName { dict["project"] = name }
+        dict["runtime"] = port.runtimeName
+        if let command = port.command { dict["command"] = command }
+        if let executable = port.executable { dict["executable"] = executable }
+        if let cpuPercent = port.cpuPercent { dict["cpuPercent"] = cpuPercent }
+        if let memoryBytes = port.memoryBytes { dict["memoryBytes"] = memoryBytes }
+        if let uptimeSeconds = port.uptimeSeconds { dict["uptimeSeconds"] = uptimeSeconds }
         return dict
     }
     if let data = try? JSONSerialization.data(withJSONObject: items, options: .prettyPrinted),
@@ -93,7 +99,7 @@ if ports.isEmpty {
 }
 
 func pad(_ str: String, to width: Int) -> String {
-    str.count >= width ? str : str + String(repeating: " ", count: width - str.count)
+    str + String(repeating: " ", count: max(1, width - str.count))
 }
 
 print("\(pad("PORT", to: 8))\(pad("PROCESS", to: 14))\(pad("PROJECT", to: 22))DIRECTORY")
