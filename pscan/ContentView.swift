@@ -2,6 +2,48 @@ import Foundation
 import PScanKit
 import SwiftUI
 
+private enum RuntimeVisual {
+    static func color(for port: PortInfo) -> Color {
+        let runtime = port.runtimeName.lowercased()
+        if port.containerID != nil || runtime.contains("docker") {
+            return Color(nsColor: .systemBlue)
+        }
+        if runtime.contains("spring") {
+            return Color(nsColor: .systemGreen)
+        }
+        if runtime.contains("java") {
+            return Color(nsColor: .systemOrange)
+        }
+        if runtime.contains("vite") || runtime.contains("nuxt") {
+            return Color(nsColor: .systemPurple)
+        }
+        if runtime.contains("next") {
+            return Color(nsColor: .labelColor)
+        }
+        if runtime.contains("node") {
+            return Color(nsColor: .systemGreen)
+        }
+        if runtime.contains("python") || runtime.contains("uvicorn") || runtime.contains("gunicorn") || runtime.contains("flask") {
+            return Color(nsColor: .systemIndigo)
+        }
+        if runtime.contains("ruby") {
+            return Color(nsColor: .systemRed)
+        }
+        return Color.accentColor
+    }
+
+    static func icon(for port: PortInfo) -> String {
+        let runtime = port.runtimeName.lowercased()
+        if port.containerID != nil || runtime.contains("docker") { return "shippingbox.fill" }
+        if runtime.contains("spring") { return "leaf.fill" }
+        if runtime.contains("java") { return "cup.and.saucer.fill" }
+        if runtime.contains("vite") { return "bolt.fill" }
+        if runtime.contains("next") || runtime.contains("nuxt") || runtime.contains("node") { return "hexagon.fill" }
+        if runtime.contains("python") || runtime.contains("uvicorn") || runtime.contains("gunicorn") || runtime.contains("flask") { return "terminal.fill" }
+        return "circle.fill"
+    }
+}
+
 private enum GroupSortMode: String {
     case name
     case cpu
@@ -41,6 +83,11 @@ private struct ServiceGroup: Identifiable {
 
     var uptimeSeconds: Int? {
         processes.compactMap(\.uptimeSeconds).max()
+    }
+
+    var tint: Color {
+        guard let first = ports.first else { return .accentColor }
+        return RuntimeVisual.color(for: first)
     }
 }
 
@@ -149,7 +196,11 @@ struct ContentView: View {
                 if !visiblePorts.isEmpty {
                     Text("\(groups.count) 项目 · \(filteredPorts.count) 端口")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.accentColor.opacity(0.10))
+                        .clipShape(Capsule())
                 }
                 Spacer()
                 Menu {
@@ -229,8 +280,15 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 28)
-                .background(.quaternary.opacity(0.7))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.82))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(
+                            searchText.isEmpty ? Color.primary.opacity(0.07) : Color.accentColor.opacity(0.32),
+                            lineWidth: 1
+                        )
+                }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
             }
@@ -282,6 +340,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
         }
         .frame(width: 410)
         .onAppear {
@@ -308,6 +367,7 @@ private struct ServiceGroupView: View {
     var scanner: AppPortScanner
     @AppStorage("showFinderButton") private var showFinder = true
     @AppStorage("showTerminalButton") private var showTerminal = true
+    @State private var isHovered = false
 
     private var shortDirectory: String? {
         group.directory?.replacingOccurrences(of: NSHomeDirectory(), with: "~")
@@ -316,6 +376,10 @@ private struct ServiceGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
+                Circle()
+                    .fill(group.tint)
+                    .frame(width: 7, height: 7)
+
                 Text(group.name)
                     .font(.system(.body, weight: .semibold))
                     .lineLimit(1)
@@ -323,10 +387,10 @@ private struct ServiceGroupView: View {
                 if group.ports.count > 1 {
                     Text("\(group.ports.count) 端口")
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(group.tint)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
-                        .background(.quaternary)
+                        .background(group.tint.opacity(0.11))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
 
@@ -338,6 +402,7 @@ private struct ServiceGroupView: View {
                             openTerminal(at: directory)
                         } label: {
                             Image(systemName: "terminal")
+                                .foregroundStyle(group.tint)
                         }
                         .help("在终端中打开项目")
                     }
@@ -347,6 +412,7 @@ private struct ServiceGroupView: View {
                             NSWorkspace.shared.open(URL(fileURLWithPath: directory))
                         } label: {
                             Image(systemName: "folder")
+                                .foregroundStyle(.secondary)
                         }
                         .help("在 Finder 中打开项目")
                     }
@@ -362,19 +428,29 @@ private struct ServiceGroupView: View {
                     .help(group.directory ?? shortDirectory)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 7) {
                 if let cpu = group.cpuPercent {
-                    Label(String(format: "%.1f%%", cpu), systemImage: "cpu")
+                    MetricPill(
+                        text: String(format: "%.1f%%", cpu),
+                        systemImage: "cpu",
+                        color: cpuColor(cpu)
+                    )
                 }
                 if let memory = group.memoryBytes {
-                    Label(formatBytes(memory), systemImage: "memorychip")
+                    MetricPill(
+                        text: formatBytes(memory),
+                        systemImage: "memorychip",
+                        color: memoryColor(memory)
+                    )
                 }
                 if let uptime = group.uptimeSeconds {
-                    Label(formatUptime(uptime), systemImage: "clock")
+                    MetricPill(
+                        text: formatUptime(uptime),
+                        systemImage: "clock",
+                        color: Color(nsColor: .systemTeal)
+                    )
                 }
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
 
             VStack(spacing: 5) {
                 ForEach(group.ports) { port in
@@ -385,6 +461,9 @@ private struct ServiceGroupView: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
+        .background(group.tint.opacity(isHovered ? 0.055 : 0))
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
     }
 
     private func openTerminal(at directory: String) {
@@ -397,12 +476,45 @@ private struct ServiceGroupView: View {
             scanner.lastError = "无法打开终端：\(error.localizedDescription)"
         }
     }
+
+    private func cpuColor(_ value: Double) -> Color {
+        if value >= 80 { return Color(nsColor: .systemRed) }
+        if value >= 40 { return Color(nsColor: .systemOrange) }
+        return Color(nsColor: .systemGreen)
+    }
+
+    private func memoryColor(_ value: UInt64) -> Color {
+        if value >= 2 * 1_024 * 1_024 * 1_024 { return Color(nsColor: .systemRed) }
+        if value >= 1_024 * 1_024 * 1_024 { return Color(nsColor: .systemOrange) }
+        return Color(nsColor: .systemIndigo)
+    }
+}
+
+private struct MetricPill: View {
+    let text: String
+    let systemImage: String
+    let color: Color
+
+    var body: some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.085))
+            .clipShape(Capsule())
+    }
 }
 
 private struct ServiceRow: View {
     let port: PortInfo
     var scanner: AppPortScanner
     @AppStorage("showKillButton") private var showKill = true
+    @State private var isHovered = false
+
+    private var tint: Color {
+        RuntimeVisual.color(for: port)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -413,19 +525,25 @@ private struct ServiceRow: View {
             } label: {
                 Text(":\(port.port)")
                     .font(.system(.caption, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(tint.opacity(0.105))
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
             .buttonStyle(.plain)
             .help("打开 http://localhost:\(port.port)")
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(port.runtimeName)
-                        .font(.caption)
+                    Label(port.runtimeName, systemImage: RuntimeVisual.icon(for: port))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(tint)
                     if let serviceName = port.serviceName,
                        serviceName.caseInsensitiveCompare(port.projectName ?? "") != .orderedSame {
                         Text(serviceName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.primary)
                     }
                     if port.processName.caseInsensitiveCompare(port.runtimeName) != .orderedSame {
                         Text(port.processName)
@@ -461,7 +579,10 @@ private struct ServiceRow: View {
                 } label: {
                     Image(systemName: "stop.circle")
                         .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(nsColor: .systemRed))
+                        .padding(3)
+                        .background(Color(nsColor: .systemRed).opacity(isHovered ? 0.12 : 0))
+                        .clipShape(Circle())
                 }
                 .help(port.containerID == nil ? "停止进程" : "停止容器")
             }
@@ -496,7 +617,12 @@ private struct ServiceRow: View {
             .menuIndicator(.hidden)
             .fixedSize()
         }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(tint.opacity(isHovered ? 0.045 : 0))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
         .contextMenu {
             if port.containerID != nil {
                 Button("停止容器") {
