@@ -24,6 +24,8 @@
 - Group multiple listening ports by project
 - Project and Git worktree detection
 - CPU, memory, and uptime summaries
+- Search by project, port, PID, runtime, path, or command
+- Switch between development services and all listening ports from the menu bar
 - Open in browser, Terminal, or Finder with one click
 - Stop, force-stop, or terminate a managed process tree
 - Active development process count badge

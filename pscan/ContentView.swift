@@ -31,6 +31,7 @@ private struct ServiceGroup: Identifiable {
 struct ContentView: View {
     var scanner: AppPortScanner
     @Binding var showAll: Bool
+    @State private var searchText = ""
 
     private var visiblePorts: [PortInfo] {
         if showAll {
@@ -39,8 +40,27 @@ struct ContentView: View {
         return scanner.ports.filter { $0.projectDirectory != nil }
     }
 
+    private var filteredPorts: [PortInfo] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return visiblePorts }
+
+        return visiblePorts.filter { port in
+            let fields = [
+                port.projectName,
+                port.projectDirectory,
+                port.directory,
+                port.runtimeName,
+                port.processName,
+                port.command,
+                String(port.port),
+                String(port.pid),
+            ]
+            return fields.compactMap { $0?.lowercased() }.contains { $0.contains(query) }
+        }
+    }
+
     private var groups: [ServiceGroup] {
-        let grouped = Dictionary(grouping: visiblePorts) { port in
+        let grouped = Dictionary(grouping: filteredPorts) { port in
             port.projectDirectory ?? "pid:\(port.pid)"
         }
 
@@ -64,6 +84,13 @@ struct ContentView: View {
         }
     }
 
+    private var listHeight: CGFloat {
+        let estimated = groups.reduce(CGFloat.zero) { partial, group in
+            partial + 64 + CGFloat(group.ports.count) * 44
+        }
+        return min(max(estimated, 150), 500)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
@@ -75,21 +102,86 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    scanner.scan()
+                Menu {
+                    Button {
+                        showAll = false
+                    } label: {
+                        if !showAll {
+                            Label("仅开发服务", systemImage: "checkmark")
+                        } else {
+                            Text("仅开发服务")
+                        }
+                    }
+                    Button {
+                        showAll = true
+                    } label: {
+                        if showAll {
+                            Label("所有监听端口", systemImage: "checkmark")
+                        } else {
+                            Text("所有监听端口")
+                        }
+                    }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: "line.3.horizontal.decrease.circle")
                 }
                 .buttonStyle(.borderless)
-                .help("刷新")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help(showAll ? "当前显示所有监听端口" : "当前仅显示开发服务")
+
+                if scanner.isScanning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                        .help("正在扫描")
+                } else {
+                    Button {
+                        scanner.scan()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("刷新")
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+
+            if !visiblePorts.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.tertiary)
+                    TextField("搜索项目、端口、PID 或命令", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.caption)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("清空搜索")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(.quaternary.opacity(0.7))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+            }
 
             Divider()
 
             if visiblePorts.isEmpty {
                 Text(showAll ? "没有发现监听端口" : "没有正在运行的开发服务")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else if filteredPorts.isEmpty {
+                Text("没有匹配的进程")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
@@ -105,7 +197,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 460)
+                .frame(height: listHeight)
             }
 
             Divider()
@@ -267,6 +359,11 @@ private struct ServiceRow: View {
                 HStack(spacing: 6) {
                     Text(port.runtimeName)
                         .font(.caption)
+                    if port.processName.caseInsensitiveCompare(port.runtimeName) != .orderedSame {
+                        Text(port.processName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Text("PID \(port.pid)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)

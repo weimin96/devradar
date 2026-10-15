@@ -7,6 +7,7 @@ import PScanKit
 final class AppPortScanner {
     var ports: [PortInfo] = []
     var lastError: String?
+    var isScanning = false
 
     private var timer: Timer?
     private let scanner = PortScanner()
@@ -28,6 +29,9 @@ final class AppPortScanner {
     }
 
     func scan() {
+        guard !isScanning else { return }
+        isScanning = true
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
@@ -43,6 +47,7 @@ final class AppPortScanner {
             let results = scanner.fetchPorts(includeAll: true, excludingPIDs: guiAppPIDs)
             DispatchQueue.main.async {
                 self.ports = results
+                self.isScanning = false
             }
         }
     }
