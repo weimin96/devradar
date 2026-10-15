@@ -2,6 +2,22 @@ import Foundation
 import PScanKit
 import SwiftUI
 
+private enum GroupSortMode: String {
+    case name
+    case cpu
+    case memory
+    case uptime
+
+    var title: String {
+        switch self {
+        case .name: return "名称"
+        case .cpu: return "CPU"
+        case .memory: return "内存"
+        case .uptime: return "运行时长"
+        }
+    }
+}
+
 private struct ServiceGroup: Identifiable {
     let id: String
     let name: String
@@ -32,6 +48,7 @@ struct ContentView: View {
     var scanner: AppPortScanner
     @Binding var showAll: Bool
     @State private var searchText = ""
+    @AppStorage("groupSortMode") private var groupSortModeRaw = GroupSortMode.name.rawValue
 
     private var visiblePorts: [PortInfo] {
         if showAll {
@@ -64,7 +81,7 @@ struct ContentView: View {
             port.projectDirectory ?? "pid:\(port.pid)"
         }
 
-        return grouped.map { key, ports in
+        let result = grouped.map { key, ports in
             let sortedPorts = ports.sorted { $0.port < $1.port }
             let first = sortedPorts[0]
             return ServiceGroup(
@@ -74,12 +91,32 @@ struct ContentView: View {
                 ports: sortedPorts
             )
         }
-        .sorted { lhs, rhs in
+
+        let mode = GroupSortMode(rawValue: groupSortModeRaw) ?? .name
+        return result.sorted { lhs, rhs in
             let lhsHasProject = lhs.directory != nil
             let rhsHasProject = rhs.directory != nil
             if lhsHasProject != rhsHasProject {
                 return lhsHasProject
             }
+
+            switch mode {
+            case .name:
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            case .cpu:
+                let l = lhs.cpuPercent ?? -1
+                let r = rhs.cpuPercent ?? -1
+                if l != r { return l > r }
+            case .memory:
+                let l = lhs.memoryBytes ?? 0
+                let r = rhs.memoryBytes ?? 0
+                if l != r { return l > r }
+            case .uptime:
+                let l = lhs.uptimeSeconds ?? 0
+                let r = rhs.uptimeSeconds ?? 0
+                if l != r { return l > r }
+            }
+
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
     }
@@ -97,7 +134,7 @@ struct ContentView: View {
                 Text("开发服务")
                     .font(.headline)
                 if !visiblePorts.isEmpty {
-                    Text("\(groups.count) 项目 · \(visiblePorts.count) 端口")
+                    Text("\(groups.count) 项目 · \(filteredPorts.count) 端口")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -121,13 +158,25 @@ struct ContentView: View {
                             Text("所有监听端口")
                         }
                     }
+                    Divider()
+                    ForEach([GroupSortMode.name, .cpu, .memory, .uptime], id: \.rawValue) { mode in
+                        Button {
+                            groupSortModeRaw = mode.rawValue
+                        } label: {
+                            if groupSortModeRaw == mode.rawValue {
+                                Label("按\(mode.title)排序", systemImage: "checkmark")
+                            } else {
+                                Text("按\(mode.title)排序")
+                            }
+                        }
+                    }
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                 }
                 .buttonStyle(.borderless)
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .help(showAll ? "当前显示所有监听端口" : "当前仅显示开发服务")
+                .help("显示与排序")
 
                 if scanner.isScanning {
                     ProgressView()
