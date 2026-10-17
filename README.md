@@ -49,7 +49,7 @@ DevRadar 会自动发现本机正在监听端口的开发进程，并尽量识�
 3. 启动 DevRadar。
 4. 顶部菜单栏出现网络图标后即可使用。
 
-下载地址：<https://github.com/weimin96/devradar/releases>
+下载地址：<https://github.com/weimin96/pscan/releases>
 
 如果你希望开机后自动运行，可以在「设置」中打开「登录时启动」。
 
@@ -108,7 +108,7 @@ DevRadar 按本机进程统计网络活动。代理转发、本机回环连接�
 如果你希望参与开发：
 
 ```bash
-git clone https://github.com/weimin96/devradar.git
+git clone https://github.com/weimin96/pscan.git devradar
 cd devradar
 open DevRadar.xcodeproj
 ```
