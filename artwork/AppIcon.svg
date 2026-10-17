@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="body" x1="172" y1="100" x2="824" y2="924" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#203C51"/>
+      <stop offset="0.48" stop-color="#102A3C"/>
+      <stop offset="1" stop-color="#081B2C"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8EB5BF" stop-opacity="0.45"/>
+      <stop offset="0.5" stop-color="#547889" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#031321" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="304" y1="718" x2="718" y2="306" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#27C9AF"/>
+      <stop offset="1" stop-color="#A2FFE0"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="512" y1="512" x2="708" y2="316" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#64F5C9" stop-opacity="0"/>
+      <stop offset="1" stop-color="#64F5C9" stop-opacity="0.25"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 100 px transparent inset keeps the rounded body within the macOS icon grid. -->
+  <rect x="100" y="112" width="824" height="824" rx="184" fill="#03111D" opacity="0.16"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#body)"/>
+  <rect x="103" y="103" width="818" height="818" rx="181" fill="none" stroke="url(#rim)" stroke-width="6"/>
+
+  <!-- One scanning sector and a broad ring remain legible at small sizes. -->
+  <path d="M512 512 536 235 A278 278 0 0 1 709 315Z" fill="url(#sweep)"/>
+  <circle cx="512" cy="512" r="278" fill="none" stroke="#45777D" stroke-width="24" opacity="0.48"/>
+  <path d="M709 709 A278 278 0 1 1 709 315" fill="none" stroke="url(#signal)" stroke-width="28" stroke-linecap="round"/>
+  <path d="m635 389 74-74" fill="none" stroke="#A2FFE0" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="709" cy="315" r="32" fill="#C2FFE9"/>
+
+  <!-- Code chevrons identify developer activity without lettering. -->
+  <path d="m450 412-102 100 102 100m124-200 102 100-102 100" fill="none" stroke="url(#signal)" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
