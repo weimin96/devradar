@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import UserNotifications
 
 struct ProcessTraffic: Identifiable, Hashable {
     let pid: Int
@@ -173,6 +174,8 @@ final class NetworkTrafficMonitor {
     private var frameNumber = 0
     private var inspectConnections = false
     private var lastHistoryRefreshAt = Date.distantPast
+    private var highUploadFramesByApplicationID: [String: Int] = [:]
+    private var lastNetworkAlertAtByApplicationID: [String: Date] = [:]
 
     init() {
         refreshHistorySnapshots()
@@ -396,6 +399,7 @@ final class NetworkTrafficMonitor {
             var applicationTotals = self.cumulativeByApplicationID
             self.applications = Self.aggregateApplications(snapshots, cumulativeTotals: &applicationTotals)
             self.cumulativeByApplicationID = applicationTotals
+            self.evaluateNetworkAlerts()
             self.historyStore.record(applications: self.applications)
             let now = Date()
             if now.timeIntervalSince(self.lastHistoryRefreshAt) >= 10 {
@@ -406,6 +410,83 @@ final class NetworkTrafficMonitor {
             self.totalUploadBytesPerSecond = totalUpload
             self.lastError = nil
             self.isRunning = true
+        }
+    }
+
+
+    func requestNetworkAlertPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func evaluateNetworkAlerts() {
+        let defaults = UserDefaults.standard
+        let enabled = defaults.object(forKey: "networkAlertEnabled") as? Bool ?? true
+        guard enabled else {
+            highUploadFramesByApplicationID.removeAll(keepingCapacity: true)
+            return
+        }
+
+        let thresholdMBps = defaults.object(forKey: "networkAlertThresholdMBps") as? Double ?? 5
+        let thresholdBytesPerSecond = Int(thresholdMBps * 1_024 * 1_024)
+        let ignoredApplications = IgnoreRules.strings(
+            from: defaults.string(forKey: IgnoreRules.networkApplicationsKey) ?? "[]"
+        )
+        let activeIDs = Set(applications.map(\.id))
+        highUploadFramesByApplicationID = highUploadFramesByApplicationID.filter { activeIDs.contains($0.key) }
+
+        for application in applications {
+            guard !ignoredApplications.contains(application.id) else {
+                highUploadFramesByApplicationID[application.id] = 0
+                continue
+            }
+
+            if application.uploadBytesPerSecond >= thresholdBytesPerSecond {
+                let frames = (highUploadFramesByApplicationID[application.id] ?? 0) + 1
+                highUploadFramesByApplicationID[application.id] = frames
+                guard frames >= 2 else { continue }
+
+                let now = Date()
+                if let previous = lastNetworkAlertAtByApplicationID[application.id],
+                   now.timeIntervalSince(previous) < 600 {
+                    continue
+                }
+                lastNetworkAlertAtByApplicationID[application.id] = now
+                deliverNetworkAlert(application, thresholdMBps: thresholdMBps)
+            } else {
+                highUploadFramesByApplicationID[application.id] = 0
+            }
+        }
+    }
+
+    private func deliverNetworkAlert(_ application: ApplicationTraffic, thresholdMBps: Double) {
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = "异常上传提醒"
+        let rate = Double(application.uploadBytesPerSecond) / 1_024 / 1_024
+        content.body = String(
+            format: "%@ 持续上传 %.1f MB/s，超过 %.0f MB/s 阈值",
+            application.name,
+            rate,
+            thresholdMBps
+        )
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "network-upload-\(application.id)-\(Int(Date().timeIntervalSince1970))",
+            content: content,
+            trigger: nil
+        )
+
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                center.add(request)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted { center.add(request) }
+                }
+            default:
+                break
+            }
         }
     }
 

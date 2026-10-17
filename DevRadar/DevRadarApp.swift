@@ -33,6 +33,8 @@ struct DevRadarApp: App {
     @State private var scanner: AppPortScanner
     @State private var trafficMonitor: NetworkTrafficMonitor
     @AppStorage("showAllPorts") private var showAll = false
+    @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
+    @AppStorage(IgnoreRules.portsKey) private var ignoredPortsRaw = "[]"
 
     init() {
         LegacyPScanMigration.runIfNeeded()
@@ -45,9 +47,15 @@ struct DevRadarApp: App {
     }
 
     private var activeCount: Int {
-        Set(
+        let ignoredProjects = IgnoreRules.strings(from: ignoredProjectsRaw)
+        let ignoredPorts = IgnoreRules.ports(from: ignoredPortsRaw)
+        return Set(
             scanner.ports
-                .filter(\.isDevelopmentService)
+                .filter { port in
+                    port.isDevelopmentService
+                        && !ignoredPorts.contains(port.port)
+                        && !ignoredProjects.contains(port.projectDirectory ?? "")
+                }
                 .map { $0.containerID ?? "pid:\($0.pid)" }
         ).count
     }

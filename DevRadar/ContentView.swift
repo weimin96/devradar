@@ -69,12 +69,20 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var panel = MonitorPanel.ports
     @AppStorage("groupSortMode") private var groupSortModeRaw = GroupSortMode.name.rawValue
+    @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
+    @AppStorage(IgnoreRules.portsKey) private var ignoredPortsRaw = "[]"
 
     private var visiblePorts: [PortInfo] {
-        if showAll {
-            return scanner.ports
+        let ignoredProjects = IgnoreRules.strings(from: ignoredProjectsRaw)
+        let ignoredPorts = IgnoreRules.ports(from: ignoredPortsRaw)
+        let notIgnored = scanner.ports.filter { port in
+            !ignoredPorts.contains(port.port)
+                && !ignoredProjects.contains(port.projectDirectory ?? "")
         }
-        return scanner.ports.filter(\.isDevelopmentService)
+        if showAll {
+            return notIgnored
+        }
+        return notIgnored.filter(\.isDevelopmentService)
     }
 
     private var filteredPorts: [PortInfo] {
@@ -366,10 +374,15 @@ private struct ServiceGroupView: View {
     @AppStorage("showBrowserButton") private var showBrowser = true
     @AppStorage("showFinderButton") private var showFinder = true
     @AppStorage("showTerminalButton") private var showTerminal = true
+    @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
     @State private var isHovered = false
 
     private var shortDirectory: String? {
         group.directory?.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+
+    private var projectRuleDirectory: String? {
+        group.ports.compactMap(\.projectDirectory).first
     }
 
     var body: some View {
@@ -391,14 +404,16 @@ private struct ServiceGroupView: View {
 
                 Spacer(minLength: 8)
 
-                if showBrowser, let port = group.ports.first?.port {
+                if showBrowser, let port = scanner.preferredWebPort(for: group.ports) {
                     Button {
                         openBrowser(port: port)
                     } label: {
                         Image(systemName: "safari")
                             .foregroundStyle(Color.accentColor.opacity(0.78))
                     }
-                    .help("在浏览器中打开 localhost:\(port)")
+                    .help(scanner.isWebService(port: port)
+                        ? "打开已识别的 Web 服务 localhost:\(port)"
+                        : "在浏览器中打开 localhost:\(port)")
                 }
 
                 if let directory = group.directory {
@@ -469,6 +484,13 @@ private struct ServiceGroupView: View {
         .background(Color.primary.opacity(isHovered ? 0.035 : 0))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
+        .contextMenu {
+            if let directory = projectRuleDirectory {
+                Button("隐藏此项目") {
+                    ignoredProjectsRaw = IgnoreRules.adding(directory, to: ignoredProjectsRaw)
+                }
+            }
+        }
     }
 
     private func openBrowser(port: Int) {
@@ -520,6 +542,8 @@ private struct ServiceRow: View {
     let port: PortInfo
     var scanner: AppPortScanner
     @AppStorage("showKillButton") private var showKill = true
+    @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
+    @AppStorage(IgnoreRules.portsKey) private var ignoredPortsRaw = "[]"
     @State private var isHovered = false
 
     var body: some View {
@@ -555,6 +579,11 @@ private struct ServiceRow: View {
                         Text(port.processName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    if scanner.isWebService(port: port.port) {
+                        Label("Web", systemImage: "globe")
+                            .font(.caption2)
+                            .foregroundStyle(Color.accentColor.opacity(0.72))
                     }
                     if port.pid > 0 {
                         Text("PID \(port.pid)")
@@ -613,6 +642,15 @@ private struct ServiceRow: View {
                         scanner.stop(port: port, mode: .force)
                     }
                 }
+                Divider()
+                Button("隐藏此端口") {
+                    ignoredPortsRaw = IgnoreRules.adding(port: port.port, to: ignoredPortsRaw)
+                }
+                if let projectDirectory = port.projectDirectory {
+                    Button("隐藏此项目") {
+                        ignoredProjectsRaw = IgnoreRules.adding(projectDirectory, to: ignoredProjectsRaw)
+                    }
+                }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13))
@@ -646,6 +684,15 @@ private struct ServiceRow: View {
                 }
                 Button("强制停止", role: .destructive) {
                     scanner.stop(port: port, mode: .force)
+                }
+            }
+            Divider()
+            Button("隐藏此端口") {
+                ignoredPortsRaw = IgnoreRules.adding(port: port.port, to: ignoredPortsRaw)
+            }
+            if let projectDirectory = port.projectDirectory {
+                Button("隐藏此项目") {
+                    ignoredProjectsRaw = IgnoreRules.adding(projectDirectory, to: ignoredProjectsRaw)
                 }
             }
         }

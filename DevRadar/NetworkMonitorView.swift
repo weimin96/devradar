@@ -27,10 +27,16 @@ struct NetworkMonitorView: View {
     @State private var timeRange = NetworkTimeRange.realtime
     @State private var sortField = NetworkSortField.upload
     @State private var sortAscending = false
+    @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
+
+    private var realtimeApplications: [ApplicationTraffic] {
+        let ignored = IgnoreRules.strings(from: ignoredApplicationsRaw)
+        return trafficMonitor.applications.filter { !ignored.contains($0.id) }
+    }
 
     private var visibleApplications: [ApplicationTraffic] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let matching = query.isEmpty ? trafficMonitor.applications : trafficMonitor.applications.filter { app in
+        let matching = query.isEmpty ? realtimeApplications : realtimeApplications.filter { app in
             let fields: [String?] = [
                 app.name,
                 app.bundleIdentifier,
@@ -56,16 +62,19 @@ struct NetworkMonitorView: View {
     }
 
     private var historicalApplications: [HistoricalApplicationTraffic] {
+        let ignored = IgnoreRules.strings(from: ignoredApplicationsRaw)
+        let applications: [HistoricalApplicationTraffic]
         switch timeRange {
         case .realtime:
-            return []
+            applications = []
         case .oneDay:
-            return trafficMonitor.history1DayApplications
+            applications = trafficMonitor.history1DayApplications
         case .threeDays:
-            return trafficMonitor.history3DayApplications
+            applications = trafficMonitor.history3DayApplications
         case .sevenDays:
-            return trafficMonitor.history7DayApplications
+            applications = trafficMonitor.history7DayApplications
         }
+        return applications.filter { !ignored.contains($0.id) }
     }
 
     private var visibleHistoricalApplications: [HistoricalApplicationTraffic] {
@@ -97,7 +106,7 @@ struct NetworkMonitorView: View {
     }
 
     private var displayedApplicationCount: Int {
-        timeRange == .realtime ? trafficMonitor.applications.count : historicalApplications.count
+        timeRange == .realtime ? realtimeApplications.count : historicalApplications.count
     }
 
     var body: some View {
@@ -257,8 +266,8 @@ struct NetworkMonitorView: View {
                 .foregroundStyle(Color(nsColor: .systemRed))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
-        } else if trafficMonitor.applications.isEmpty {
-            Text("当前没有检测到网络活动")
+        } else if realtimeApplications.isEmpty {
+            Text(trafficMonitor.applications.isEmpty ? "当前没有检测到网络活动" : "网络应用已全部隐藏")
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
@@ -323,6 +332,7 @@ struct NetworkMonitorView: View {
 
 private struct HistoricalApplicationTrafficRow: View {
     let application: HistoricalApplicationTraffic
+    @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
 
     private var icon: NSImage {
         guard let bundlePath = application.bundlePath else {
@@ -365,9 +375,27 @@ private struct HistoricalApplicationTrafficRow: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+
+            Menu {
+                Button("隐藏此应用") {
+                    ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .contextMenu {
+            Button("隐藏此应用") {
+                ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
+            }
+        }
     }
 }
 
@@ -375,6 +403,7 @@ private struct ApplicationTrafficRow: View {
     let application: ApplicationTraffic
     let processes: [ProcessTraffic]
     var trafficMonitor: NetworkTrafficMonitor
+    @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
     @State private var isExpanded = false
     @State private var openFiles: [OpenProjectFile] = []
     @State private var isLoadingOpenFiles = false
@@ -480,6 +509,19 @@ private struct ApplicationTrafficRow: View {
                         .foregroundStyle(.tertiary)
                         .frame(width: 12)
                 }
+
+                Menu {
+                    Button("隐藏此应用") {
+                        ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -503,6 +545,11 @@ private struct ApplicationTrafficRow: View {
                     isLoadingOpenFiles: isLoadingOpenFiles
                 )
                     .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .contextMenu {
+            Button("隐藏此应用") {
+                ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
             }
         }
     }
