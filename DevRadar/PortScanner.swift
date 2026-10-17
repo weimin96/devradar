@@ -333,7 +333,7 @@ public final class PortScanner: @unchecked Sendable {
         workingDirectories(for: [pid])[pid]
     }
 
-    private static func workingDirectories(for pids: [Int]) -> [Int: String] {
+    public static func workingDirectories(for pids: [Int]) -> [Int: String] {
         guard !pids.isEmpty else { return [:] }
 
         let task = Process()

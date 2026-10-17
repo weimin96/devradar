@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import PScanKit
 
 @Observable
 final class AppPortScanner {

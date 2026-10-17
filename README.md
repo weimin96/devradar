@@ -1,84 +1,122 @@
-<p align="center">
-  <img src="icon.png" width="128" />
-</p>
+# DevRadar
 
-<h1 align="center">pscan</h1>
+**Mac 菜单栏里的开发活动雷达。**
 
-<p align="center">
-  Menu bar app to monitor and manage your localhost ports.
-</p>
+DevRadar 用一个很小的菜单栏窗口，帮你快速看清电脑上正在运行的开发服务、占用的端口、所属项目，以及各个应用的网络上传/下载情况。
 
-<p align="center">
-  <a href="https://github.com/mavideniz/pscan/releases/latest">Download</a> · <a href="#cli">CLI</a> · <a href="#license">License</a>
-</p>
+它适合经常同时运行 Node.js、Java、Python、Docker、IDE、AI 编程工具和本地代理的 Mac 用户。你不需要记命令，也不用打开活动监视器和终端来回查进程。
 
----
+## 你可以用它做什么
 
-<p align="center">
-  <img src="screenshot.png" width="420" />
-</p>
+### 看清正在运行的开发服务
 
-## Features
+DevRadar 会自动发现本机正在监听端口的开发进程，并尽量识别：
 
-- See active development processes and ports at a glance from the menu bar
-- Group multiple listening ports by project
-- Project and Git worktree detection
-- Spring Boot service-name detection via `spring.application.name`
-- Docker published-port mapping with Compose project/service metadata
-- Supervisor-aware stop for PM2, nodemon, npm, and pnpm process trees
-- CPU, memory, and uptime summaries
-- Search by project, port, PID, runtime, path, or command
-- Switch between development services and all listening ports from the menu bar
-- Sort projects by name, CPU, memory, or uptime
-- Open in browser, Terminal, or Finder with one click
-- Stop, force-stop, or terminate a managed process tree
-- Active development process count badge
-- Launch at login
-- Configurable via Options window
+- 项目名称和项目目录
+- 监听端口和 PID
+- Node.js、Vite、Next.js、Java、Spring Boot、Python 等运行环境
+- Docker / Docker Compose 服务
+- CPU、内存和运行时长
 
-## Install
+多个端口属于同一个项目时，会自动归到一起，不再是一长串难以辨认的进程。
 
-### Menu Bar App
+### 快速处理占用端口的进程
 
-Download the latest `.zip` from [Releases](https://github.com/mavideniz/pscan/releases/latest) or [World Vibe Web](https://wvw.dev), unzip, and move `pscan.app` to Applications.
+在菜单栏里可以直接：
 
-### CLI
+- 打开本地服务地址
+- 在 Finder 中打开项目目录
+- 在终端中进入项目目录
+- 停止或强制结束开发进程
 
+### 查看哪些应用正在联网
+
+切换到「网络监控」后，可以查看每个应用的上传和下载流量，包括：
+
+- 实时上传 / 下载速度
+- 1 天、3 天、7 天累计流量
+- 按上传量或下载量排序
+- 当前连接的远程地址
+- Node.js、Python 等命令行进程对应的项目
+- 尽量识别进程是由 Terminal、iTerm2、ChatGPT 等哪个应用启动的
+
+对于长期运行、父进程已经退出的后台进程，macOS 本身可能已经丢失最初的启动关系。DevRadar 会继续根据工作目录、命令行和项目文件进行推断，因此这类归因属于尽力识别，并不保证 100% 准确。
+
+## 安装
+
+1. 从 GitHub 的 **Releases** 页面下载最新的 `DevRadar.app` 压缩包。
+2. 解压后把 `DevRadar.app` 拖到「应用程序」。
+3. 启动 DevRadar。
+4. 顶部菜单栏出现网络图标后即可使用。
+
+下载地址：<https://github.com/weimin96/devradar/releases>
+
+如果你希望开机后自动运行，可以在「设置」中打开「登录时启动」。
+
+## 基本使用
+
+点击菜单栏中的 DevRadar 图标，会看到两个主要页面：
+
+### 端口监控
+
+默认只显示开发服务。你可以搜索项目、端口、PID 或命令，也可以切换为显示所有监听端口。
+
+项目列表支持按名称、CPU、内存和运行时长排序。
+
+### 网络监控
+
+可以在「实时 / 1 天 / 3 天 / 7 天」之间切换。
+
+点击顶部的「上传」或「下载」即可按对应流量排序；再次点击会切换升序和降序。
+
+历史流量只保存在本机。如果不想保留，可以进入：
+
+`设置 → 网络监控 → 清空网络记录`
+
+## 隐私
+
+DevRadar 的监控和统计都在本机完成。
+
+- 不需要登录账号
+- 不会把扫描结果上传到 DevRadar 的服务器
+- 网络历史记录保存在 `~/Library/Application Support/DevRadar/`
+- 只读取进程、端口、网络连接和与项目识别有关的本机信息
+
+DevRadar 展示的是进程产生的网络流量，不会读取 HTTPS 请求正文，也不会解密你的网络通信内容。
+
+## 系统要求
+
+- macOS 14 或更高版本
+- Apple Silicon 和 Intel Mac 均可
+
+## 常见问题
+
+### 为什么有些进程只显示 `node` 或 `python`？
+
+DevRadar 会优先使用工作目录、完整启动命令和父进程链来识别项目。如果这些信息已经被系统回收，或者进程本身没有携带项目路径，就只能显示运行时名称。
+
+### 为什么应用的流量和代理软件中的统计不完全一致？
+
+DevRadar 按本机进程统计网络活动。代理转发、本机回环连接、系统辅助进程等情况可能造成统计口径不同，因此它更适合用来判断「哪个应用在产生流量」，而不是作为运营商级别的流量计费工具。
+
+### 网络历史会一直增长吗？
+
+不会。DevRadar 只保留用于 1 天、3 天和 7 天统计所需的短期数据，并会自动清理更早的记录。
+
+## 从源码构建
+
+如果你希望参与开发：
+
+```bash
+git clone https://github.com/weimin96/devradar.git
+cd devradar
+open DevRadar.xcodeproj
 ```
-brew install mavideniz/pscan/pscan
-```
 
-Or build from source:
+在 Xcode 中运行 `DevRadar` target 即可。
 
-```
-swift build -c release
-cp .build/release/pscan /usr/local/bin/pscan
-```
+## 开源许可
 
-## CLI
+DevRadar 使用 MIT License。
 
-```
-$ pscan
-PORT    PROCESS       PROJECT               DIRECTORY
-────────────────────────────────────────────────────────────────────────
-:3000   node          finance-web           ~/Developer/finance-web
-:3001   node          admin-panel           ~/Developer/admin-panel
-:5173   vite          landing-page          ~/Developer/landing-page
-```
-
-### Options
-
-| Flag | Description |
-|------|-------------|
-| `-a, --all` | Show all ports including system services |
-| `-j, --json` | Output as JSON |
-| `-k, --kill PORT` | Stop the service on a given port (supervisor/container aware) |
-| `-h, --help` | Show help |
-
-## Requirements
-
-- macOS 13+
-
-## License
-
-[MIT](LICENSE)
+网络进程采样部分参考了 iTraffic，相关许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

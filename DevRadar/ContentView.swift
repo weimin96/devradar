@@ -1,5 +1,4 @@
 import Foundation
-import PScanKit
 import SwiftUI
 
 private enum RuntimeVisual {
@@ -31,6 +30,11 @@ private enum GroupSortMode: String {
     }
 }
 
+private enum MonitorPanel {
+    case ports
+    case network
+}
+
 private struct ServiceGroup: Identifiable {
     let id: String
     let name: String
@@ -60,8 +64,10 @@ private struct ServiceGroup: Identifiable {
 
 struct ContentView: View {
     var scanner: AppPortScanner
+    var trafficMonitor: NetworkTrafficMonitor
     @Binding var showAll: Bool
     @State private var searchText = ""
+    @State private var panel = MonitorPanel.ports
     @AppStorage("groupSortMode") private var groupSortModeRaw = GroupSortMode.name.rawValue
 
     private var visiblePorts: [PortInfo] {
@@ -157,143 +163,30 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("开发服务")
-                    .font(.headline)
-                if !visiblePorts.isEmpty {
-                    Text("\(groups.count) 项目 · \(filteredPorts.count) 端口")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.quaternary.opacity(0.7))
-                        .clipShape(Capsule())
-                }
-                Spacer()
-                Menu {
-                    Button {
-                        showAll = false
-                    } label: {
-                        if !showAll {
-                            Label("仅开发服务", systemImage: "checkmark")
-                        } else {
-                            Text("仅开发服务")
-                        }
-                    }
-                    Button {
-                        showAll = true
-                    } label: {
-                        if showAll {
-                            Label("所有监听端口", systemImage: "checkmark")
-                        } else {
-                            Text("所有监听端口")
-                        }
-                    }
-                    Divider()
-                    ForEach([GroupSortMode.name, .cpu, .memory, .uptime], id: \.rawValue) { mode in
-                        Button {
-                            groupSortModeRaw = mode.rawValue
-                        } label: {
-                            if groupSortModeRaw == mode.rawValue {
-                                Label("按\(mode.title)排序", systemImage: "checkmark")
-                            } else {
-                                Text("按\(mode.title)排序")
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .foregroundStyle(Color.accentColor.opacity(0.72))
-                }
-                .buttonStyle(.borderless)
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .help("显示与排序")
-
-                if scanner.isScanning {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 16, height: 16)
-                        .help("正在扫描")
-                } else {
-                    Button {
-                        scanner.scan()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundStyle(Color.accentColor.opacity(0.72))
-                    }
-                    .buttonStyle(.borderless)
-                    .help("刷新")
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            if !visiblePorts.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.tertiary)
-                    TextField("搜索项目、端口、PID 或命令", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.caption)
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.tertiary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("清空搜索")
-                    }
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.82))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(
-                            searchText.isEmpty ? Color.primary.opacity(0.07) : Color.accentColor.opacity(0.32),
-                            lineWidth: 1
-                        )
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
-            }
-
-            Divider()
-
-            if visiblePorts.isEmpty {
-                Text(showAll ? "没有发现监听端口" : "没有正在运行的开发服务")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-            } else if filteredPorts.isEmpty {
-                Text("没有匹配的进程")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+            if panel == .ports {
+                portMonitorContent
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(groups) { group in
-                            ServiceGroupView(group: group, scanner: scanner)
-                            if group.id != groups.last?.id {
-                                Divider()
-                                    .padding(.leading, 12)
-                            }
-                        }
-                    }
-                }
-                .frame(height: listHeight)
+                NetworkMonitorView(trafficMonitor: trafficMonitor)
             }
 
             Divider()
 
             HStack {
                 Button {
-                    SettingsWindow.open()
+                    panel = panel == .ports ? .network : .ports
+                    searchText = ""
+                } label: {
+                    Image(systemName: panel == .ports ? "arrow.up.arrow.down" : "network")
+                    Text(panel == .ports ? "网络监控" : "端口监控")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+
+                Divider()
+                    .frame(height: 12)
+
+                Button {
+                    SettingsWindow.open(trafficMonitor: trafficMonitor)
                 } label: {
                     Image(systemName: "gearshape")
                     Text("设置")
@@ -314,6 +207,7 @@ struct ContentView: View {
         .frame(width: 410)
         .onAppear {
             scanner.startScanning()
+            trafficMonitor.start()
         }
         .alert(
             "操作失败",
@@ -327,6 +221,141 @@ struct ContentView: View {
             }
         } message: {
             Text(scanner.lastError ?? "未知错误")
+        }
+    }
+
+    @ViewBuilder
+    private var portMonitorContent: some View {
+        HStack(spacing: 8) {
+            Text("开发服务")
+                .font(.headline)
+            if !visiblePorts.isEmpty {
+                Text("\(groups.count) 项目 · \(filteredPorts.count) 端口")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(.quaternary.opacity(0.7))
+                    .clipShape(Capsule())
+            }
+            Spacer()
+            Menu {
+                Button {
+                    showAll = false
+                } label: {
+                    if !showAll {
+                        Label("仅开发服务", systemImage: "checkmark")
+                    } else {
+                        Text("仅开发服务")
+                    }
+                }
+                Button {
+                    showAll = true
+                } label: {
+                    if showAll {
+                        Label("所有监听端口", systemImage: "checkmark")
+                    } else {
+                        Text("所有监听端口")
+                    }
+                }
+                Divider()
+                ForEach([GroupSortMode.name, .cpu, .memory, .uptime], id: \.rawValue) { mode in
+                    Button {
+                        groupSortModeRaw = mode.rawValue
+                    } label: {
+                        if groupSortModeRaw == mode.rawValue {
+                            Label("按\(mode.title)排序", systemImage: "checkmark")
+                        } else {
+                            Text("按\(mode.title)排序")
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(Color.accentColor.opacity(0.72))
+            }
+            .buttonStyle(.borderless)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("显示与排序")
+
+            if scanner.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 16, height: 16)
+                    .help("正在扫描")
+            } else {
+                Button {
+                    scanner.scan()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundStyle(Color.accentColor.opacity(0.72))
+                }
+                .buttonStyle(.borderless)
+                .help("刷新")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+
+        if !visiblePorts.isEmpty {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.tertiary)
+                TextField("搜索项目、端口、PID 或命令", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("清空搜索")
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.82))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        searchText.isEmpty ? Color.primary.opacity(0.07) : Color.accentColor.opacity(0.32),
+                        lineWidth: 1
+                    )
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+        }
+
+        Divider()
+
+        if visiblePorts.isEmpty {
+            Text(showAll ? "没有发现监听端口" : "没有正在运行的开发服务")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+        } else if filteredPorts.isEmpty {
+            Text("没有匹配的进程")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(groups) { group in
+                        ServiceGroupView(group: group, scanner: scanner)
+                        if group.id != groups.last?.id {
+                            Divider()
+                                .padding(.leading, 12)
+                        }
+                    }
+                }
+            }
+            .frame(height: listHeight)
         }
     }
 }
