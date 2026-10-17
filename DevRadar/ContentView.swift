@@ -363,6 +363,7 @@ struct ContentView: View {
 private struct ServiceGroupView: View {
     let group: ServiceGroup
     var scanner: AppPortScanner
+    @AppStorage("showBrowserButton") private var showBrowser = true
     @AppStorage("showFinderButton") private var showFinder = true
     @AppStorage("showTerminalButton") private var showTerminal = true
     @State private var isHovered = false
@@ -389,6 +390,16 @@ private struct ServiceGroupView: View {
                 }
 
                 Spacer(minLength: 8)
+
+                if showBrowser, let port = group.ports.first?.port {
+                    Button {
+                        openBrowser(port: port)
+                    } label: {
+                        Image(systemName: "safari")
+                            .foregroundStyle(Color.accentColor.opacity(0.78))
+                    }
+                    .help("在浏览器中打开 localhost:\(port)")
+                }
 
                 if let directory = group.directory {
                     if showTerminal {
@@ -458,6 +469,11 @@ private struct ServiceGroupView: View {
         .background(Color.primary.opacity(isHovered ? 0.035 : 0))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
+    }
+
+    private func openBrowser(port: Int) {
+        guard let url = URL(string: "http://localhost:\(port)") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func openTerminal(at directory: String) {

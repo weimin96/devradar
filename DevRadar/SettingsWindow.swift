@@ -31,6 +31,7 @@ struct SettingsView: View {
     var trafficMonitor: NetworkTrafficMonitor
     @AppStorage("showAllPorts") private var showAll = false
     @AppStorage("showKillButton") private var showKill = true
+    @AppStorage("showBrowserButton") private var showBrowser = true
     @AppStorage("showFinderButton") private var showFinder = true
     @AppStorage("showTerminalButton") private var showTerminal = true
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -56,8 +57,9 @@ struct SettingsView: View {
 
             Section("操作") {
                 Toggle("显示停止按钮", isOn: $showKill)
-                Toggle("显示 Finder 按钮", isOn: $showFinder)
+                Toggle("显示浏览器按钮", isOn: $showBrowser)
                 Toggle("显示终端按钮", isOn: $showTerminal)
+                Toggle("显示 Finder 按钮", isOn: $showFinder)
             }
 
             Section("网络监控") {
