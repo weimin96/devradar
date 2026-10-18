@@ -198,7 +198,7 @@ private struct CaptureInspectorView: View {
                         .help("只导出域名、方法、状态、耗时、流量；不导出路径、Headers、正文")
                 } else {
                     if packetCapture.state == .ready || packetCapture.state == .failed {
-                        Button(packetCapture.state == .failed ? "重新开始抓包" : "开始抓包") {
+                        Button(packetCapture.state == .failed ? "重试原始 PCAPNG" : "开始原始 PCAPNG") {
                             packetCapture.startPreparedCapture()
                         }
                         .buttonStyle(.borderedProminent)
@@ -265,6 +265,9 @@ private struct CaptureInspectorView: View {
                     Text(result).font(.caption).foregroundStyle(.secondary)
                 }
             } else {
+                Label("原应用 TCP/UDP 443 连接统计自动运行，不需要管理员权限。右侧可查看逐连接上传量。", systemImage: "lock.shield")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if packetCapture.state == .ready {
                     Label(
                         "已选中 \(packetCapture.selectedPIDs.count) 个进程（PID：\(packetCapture.selectedPIDs.map(String.init).joined(separator: ", "))）。点击「开始抓包」后才会请求管理员授权。",
@@ -398,13 +401,13 @@ private struct CaptureInspectorView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: 380)
             } else {
-                Text("点击开始后将请求 macOS 管理员授权，最多抓取 10 分钟或 10,000 个数据包。HTTPS 正文不会被解密。")
+                            Text("HTTPS / QUIC 逐连接统计已自动开始，右侧「分析概览」可查看。只有需要原始 PCAPNG 文件时，才需要点击下面的按钮并授予管理员权限。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 350)
             }
-            Button(packetCapture.state == .failed ? "重试抓包" : "开始抓包") {
+            Button(packetCapture.state == .failed ? "重试原始 PCAPNG" : "开始原始 PCAPNG") {
                 packetCapture.startPreparedCapture()
             }
             .buttonStyle(.borderedProminent)

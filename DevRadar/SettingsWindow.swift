@@ -93,10 +93,10 @@ struct SettingsView: View {
             }
 
             Section("抓包") {
-                Text("按 PID 抓包始终包含 TCP/UDP 443 等加密连接。只会在你手动抓包时请求管理员授权，不会解密 HTTPS 请求正文。")
+                Text("选择应用后会自动监控原进程 TCP/UDP 443 的逐连接上传、下载字节，无须管理员权限和 HTTPS 代理。原始 PCAPNG 抓包另需手动授权。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Text("原始数据包的 HTTPS 正文仍然加密；要解密请使用下方本地代理。")
+                Text("HTTPS 正文始终加密；只在应用实际使用下方的本地代理、且 CA 被信任时，才可能查看解密请求。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

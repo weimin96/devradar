@@ -74,6 +74,7 @@ struct CaptureAnalyticsView: View {
             Label("按应用进程归集的 nettop 速率；不是 HTTP 请求正文，也不能据此判断数据内容", systemImage: "checkmark.shield")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            httpsConnectionSection
             HStack(spacing: 12) {
                 statistic("当前上传", networkRate(appAnalysis.currentUploadBytesPerSecond), symbol: "arrow.up")
                 statistic("窗口峰值", networkRate(appAnalysis.peakUploadBytesPerSecond), symbol: "chart.line.uptrend.xyaxis")
@@ -148,6 +149,98 @@ struct CaptureAnalyticsView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var httpsConnectionSection: some View {
+        section("原应用 HTTPS / QUIC 连接 · 自动监控") {
+            HStack {
+                Text("TCP/UDP 443")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("导出连接证据 JSON") { exportHTTPSConnections() }
+                    .font(.caption)
+                    .disabled(packetCapture.httpsConnections.isEmpty)
+            }
+            HStack(spacing: 12) {
+                statistic(
+                    "监测到的 443 连接",
+                    "\(packetCapture.httpsConnections.count)",
+                    symbol: "lock.shield"
+                )
+                statistic(
+                    "监测开始后上传",
+                    ByteCountFormatter.string(
+                        fromByteCount: Int64(clamping: packetCapture.httpsConnections.reduce(UInt64(0)) {
+                            $0 &+ $1.uploadedBytes
+                        }), countStyle: .file
+                    ),
+                    symbol: "arrow.up"
+                )
+            }
+            Label("针对原应用 PID 的逐 socket 计数，无须代理或重启应用，也不读取 HTTPS 正文。", systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let error = packetCapture.httpsMonitoringError {
+                Text("连接监控错误：\(error)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if packetCapture.httpsConnections.isEmpty {
+                unavailable("等待该应用的 TCP/UDP 443 连接及新数据。没有连接时上传量为零。")
+            } else {
+                ForEach(Array(packetCapture.httpsConnections.prefix(15))) { connection in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(connection.remoteAddress)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                            Spacer()
+                            Text(ByteCountFormatter.string(
+                                fromByteCount: Int64(clamping: connection.uploadedBytes),
+                                countStyle: .file
+                            ))
+                            .font(.caption.monospacedDigit())
+                        }
+                        HStack(spacing: 8) {
+                            Text("PID \(connection.pid)")
+                            Text(connection.protocolLabel)
+                            Spacer()
+                            Text("↓ " + ByteCountFormatter.string(
+                                fromByteCount: Int64(clamping: connection.downloadedBytes),
+                                countStyle: .file
+                            ))
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 3)
+                }
+            }
+            Text("按 nettop 连接累计计数差值得出，仅统计开始监控后的字节；既有连接之前传输的数据不计入。443 端口只表示可能是 HTTPS/TLS 或 QUIC，无法证明应用层协议，也无法还原加密上传内容。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func exportHTTPSConnections() {
+        guard !packetCapture.httpsConnections.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "DevRadar-HTTPS-Connections.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let bytes = try HTTPSConnectionReport.encode(
+                applicationName: packetCapture.applicationName,
+                connections: packetCapture.httpsConnections
+            )
+            try bytes.write(to: url, options: [.atomic])
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: url.path
+            )
+            exportError = nil
+        } catch {
+            exportError = "导出 HTTPS 连接证据失败：\(error.localizedDescription)"
         }
     }
 

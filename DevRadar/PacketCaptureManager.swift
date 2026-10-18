@@ -25,6 +25,9 @@ final class PacketCaptureManager {
     var selectedConnectionCount = 0
     var selectedRemoteEndpoints: [String] = []
     var selectedPIDs: [Int] = []
+    var httpsConnections: [HTTPSConnection] = []
+    var httpsMonitoringError: String?
+    private var httpsReader: HTTPSConnectionReader?
 
     private var directory: URL?
     private var packetTextLog: URL?
@@ -94,6 +97,27 @@ final class PacketCaptureManager {
         packetAccumulator.reset()
         packetTextOffset = 0
         lastError = nil
+        // Begin reading the original process' encrypted TCP/UDP 443
+        // connection counters immediately. This never requires CA, admin
+        // privileges, a proxy change, or restarting the selected application.
+        httpsReader?.stop()
+        httpsConnections = []
+        httpsMonitoringError = nil
+        let reader = HTTPSConnectionReader(pids: pids)
+        httpsReader = reader
+        reader.onUpdate = { [weak self, weak reader] connections in
+            DispatchQueue.main.async {
+                guard let self, let reader, self.httpsReader === reader else { return }
+                self.httpsConnections = connections
+            }
+        }
+        reader.onError = { [weak self, weak reader] message in
+            DispatchQueue.main.async {
+                guard let self, let reader, self.httpsReader === reader else { return }
+                self.httpsMonitoringError = message
+            }
+        }
+        reader.start()
         state = .ready
     }
 
@@ -239,6 +263,10 @@ final class PacketCaptureManager {
     func clear() {
         guard !isBusy else { return }
         discardFinishedSession()
+        httpsReader?.stop()
+        httpsReader = nil
+        httpsConnections = []
+        httpsMonitoringError = nil
         state = .idle
         applicationName = ""
         selectedApplicationID = ""
