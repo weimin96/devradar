@@ -181,7 +181,7 @@ struct NetworkMonitorView: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
             Button("查看记录") {
-                AutomaticHTTPSEvidenceWindow.open(manager: trafficMonitor.automaticHTTPSEvidence)
+                AutomaticHTTPSEvidenceWindow.open(trafficMonitor: trafficMonitor)
             }
             .buttonStyle(.borderless)
             .font(.caption)

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum AutomaticHTTPSEvidenceWindow {
-    static func open(manager: AutomaticHTTPSEvidenceManager) {
+    static func open(trafficMonitor: NetworkTrafficMonitor) {
         if let window = NSApp.windows.first(where: { $0.title == "DevRadar · 自动 HTTPS 证据" }) {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -14,7 +14,7 @@ enum AutomaticHTTPSEvidenceWindow {
             backing: .buffered, defer: false
         )
         window.title = "DevRadar · 自动 HTTPS 证据"
-        window.contentView = NSHostingView(rootView: AutomaticHTTPSEvidenceView(manager: manager))
+        window.contentView = NSHostingView(rootView: AutomaticHTTPSEvidenceView(trafficMonitor: trafficMonitor))
         window.minSize = NSSize(width: 710, height: 470)
         window.center()
         window.isReleasedWhenClosed = false
@@ -24,8 +24,20 @@ enum AutomaticHTTPSEvidenceWindow {
 }
 
 private struct AutomaticHTTPSEvidenceView: View {
-    var manager: AutomaticHTTPSEvidenceManager
+    var trafficMonitor: NetworkTrafficMonitor
     @State private var exportError: String?
+
+    private var manager: AutomaticHTTPSEvidenceManager { trafficMonitor.automaticHTTPSEvidence }
+
+    private func matchedEvent(for record: AutomaticHTTPSRecord) -> CombinedUploadEvidence {
+        let incidents = trafficMonitor.uploadAnalysis[record.applicationID]?.incidents ?? []
+        return CombinedUploadEvidenceMatcher.combine(
+            applicationID: record.applicationID,
+            incidents: incidents,
+            automaticRecords: manager.records
+        ).first { $0.automatic?.id == record.id }
+            ?? CombinedUploadEvidence(incident: nil, automatic: record)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -68,46 +80,12 @@ private struct AutomaticHTTPSEvidenceView: View {
     }
 
     private func recordCard(_ record: AutomaticHTTPSRecord) -> some View {
-        DisclosureGroup {
+        let linked = matchedEvent(for: record)
+        return DisclosureGroup {
             VStack(alignment: .leading, spacing: 10) {
+                CombinedUploadEvidenceDetailView(evidence: linked)
                 HStack {
-                    Text("进程 PID：\(record.pids.map(String.init).joined(separator: ", "))")
-                    Spacer()
-                    Text("观测：\(Int(record.monitorFinishedAt.timeIntervalSince(record.monitorStartedAt))) 秒")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                if record.latestFlows.isEmpty {
-                    Text("这段窗口未捕获到 TCP/UDP 443 连接，不能据此断言应用没有联网。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(Array(record.latestFlows.prefix(35))) { flow in
-                        HStack(spacing: 8) {
-                            Text(flow.remoteAddress)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                            Spacer()
-                            Text(flow.classification)
-                                .foregroundStyle(.secondary)
-                            Text("↑ " + bytes(flow.uploadedBytes))
-                                .monospacedDigit()
-                            Text("↓ " + bytes(flow.downloadedBytes))
-                                .monospacedDigit()
-                        }
-                        .font(.caption)
-                    }
-                    if record.latestFlows.count > 35 {
-                        Text("其余 \(record.latestFlows.count - 35) 条连接可在导出 JSON 中查看")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Text("字节数来自 nettop 的连接计数增量，仅代表监控期间的实际传输；443 端口不等于已确认 HTTPS，也无法判断上传内容。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Button("导出 JSON") { export(record) }
+                    Button("导出完整诊断 JSON") { export(record, linked: linked) }
                     Button("删除记录", role: .destructive) { manager.deleteRecord(record) }
                     Spacer()
                 }
@@ -133,15 +111,18 @@ private struct AutomaticHTTPSEvidenceView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private func export(_ record: AutomaticHTTPSRecord) {
+    private func export(_ record: AutomaticHTTPSRecord, linked: CombinedUploadEvidence) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "DevRadar-Auto-HTTPS-\(record.id.uuidString.prefix(8)).json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(record).write(to: url, options: .atomic)
+            let data = try UploadEvidenceReport.encode(
+                applicationID: record.applicationID,
+                applicationName: record.applicationName,
+                incidents: linked.incident.map { [$0] } ?? [],
+                automaticRecords: [record]
+            )
+            try data.write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             exportError = nil
         } catch {

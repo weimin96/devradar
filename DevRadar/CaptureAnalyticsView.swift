@@ -19,6 +19,14 @@ struct CaptureAnalyticsView: View {
         trafficMonitor.uploadAnalysis[packetCapture.selectedApplicationID] ?? TrafficAnalysisBuffer()
     }
 
+    private var combinedIncidents: [CombinedUploadEvidence] {
+        CombinedUploadEvidenceMatcher.combine(
+            applicationID: packetCapture.selectedApplicationID,
+            incidents: appAnalysis.incidents,
+            automaticRecords: trafficMonitor.automaticHTTPSEvidence.records
+        )
+    }
+
     private var completedRequests: [LocalProxyEvent] {
         localProxy.events.filter { $0.type == "request" }
     }
@@ -245,15 +253,15 @@ struct CaptureAnalyticsView: View {
     }
 
     private var incidentSection: some View {
-        section("异常事件证据 · 最近 30 分钟") {
+        section("异常事件时间线 · 自动 HTTPS 连接证据") {
             HStack {
-                Text("仅时间关联：突增前 16 秒 / 后 20 秒")
+                Text("应用速率存内存 30 分钟；自动连接记录保存最多 7 天")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("导出诊断报告 JSON") { exportApplicationEvidence() }
+                Button("导出完整诊断 JSON") { exportApplicationEvidence() }
                     .font(.caption)
-                    .disabled(appAnalysis.incidents.isEmpty)
+                    .disabled(combinedIncidents.isEmpty)
             }
             if let exportError {
                 Text(exportError)
@@ -261,93 +269,46 @@ struct CaptureAnalyticsView: View {
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
             }
-            if appAnalysis.incidents.isEmpty {
-                unavailable("当前未检测到达到阈值的突增；持续高流量仍可从上方趋势查看。")
+            if combinedIncidents.isEmpty {
+                unavailable("暂无突增或自动 HTTPS 连接记录。连续超阈值也可能触发自动记录。")
             } else {
-                ForEach(appAnalysis.incidents.reversed()) { incident in
+                ForEach(combinedIncidents) { evidence in
                     DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("观测 PID：\(incident.observedPIDs.map(String.init).joined(separator: ", "))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Chart {
-                                ForEach(incident.samples) { sample in
-                                    LineMark(
-                                        x: .value("时间", sample.date),
-                                        y: .value("上传 KB/s", Double(sample.uploadBytesPerSecond) / 1024)
-                                    )
-                                    .foregroundStyle(.orange)
-                                }
-                                RuleMark(x: .value("突增", incident.triggeredAt))
-                                    .lineStyle(StrokeStyle(dash: [4, 4]))
-                                    .foregroundStyle(.red)
-                            }
-                            .frame(height: 125)
-                            if incident.connections.isEmpty {
-                                Text("事件窗口没有实际采集到连接快照，无法提供连接目标。")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(incident.connections, id: \.capturedAt) { snapshot in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack {
-                                            Text(snapshot.capturedAt, style: .time)
-                                            Text(snapshot.capturedAt <= incident.triggeredAt ? "触发前 / 同时" : "触发后")
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        .font(.caption.weight(.medium))
-                                        if snapshot.endpoints.isEmpty {
-                                            Text("已检查，未发现非本机连接")
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                        } else {
-                                            ForEach(Array(snapshot.endpoints.prefix(6)), id: \.self) { endpoint in
-                                                Text("\(endpoint.transport) · \(endpoint.address)")
-                                                    .font(.caption2.monospaced())
-                                                    .textSelection(.enabled)
-                                            }
-                                            if snapshot.endpoints.count > 6 {
-                                                Text("另有 \(snapshot.endpoints.count - 6) 个连接，详见导出报告")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Text("连接目标与上传速率仅在时间上相关，不能证明流量发送到了其中任何地址。")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.top, 8)
+                        CombinedUploadEvidenceDetailView(evidence: evidence)
                     } label: {
                         HStack(spacing: 8) {
-                            Text(incident.triggeredAt, style: .time)
+                            Text(evidence.triggeredAt, style: .date)
+                            Text(evidence.triggeredAt, style: .time)
                             Spacer()
-                            Text(networkRate(incident.peakUploadBytesPerSecond))
+                            if let incident = evidence.incident {
+                                Text(networkRate(incident.peakUploadBytesPerSecond))
                                 .monospacedDigit()
-                            Text(incident.isComplete ? "已完成" : "采集中")
+                            }
+                            Text(evidence.isTimeLinked ? "速率 + 443 连接" :
+                                 evidence.incident != nil ? "仅速率" : "仅自动连接")
                                 .foregroundStyle(.secondary)
                         }
                         .font(.caption)
                     }
                 }
             }
-            Text("只在内存中保存，最多 12 次事件；导出须手动操作。不包含正文、HTTP URL、代理解密内容。")
+            Text("仅在应用 ID、PID 与触发时间相符时合并；未匹配事件独立显示。报告不包含正文、HTTP URL 或代理解密内容。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
     }
 
     private func exportApplicationEvidence() {
-        guard !appAnalysis.incidents.isEmpty else { return }
+        guard !combinedIncidents.isEmpty else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "DevRadar-Upload-Evidence.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let bytes = try UploadEvidenceReport.encode(
+                applicationID: packetCapture.selectedApplicationID,
                 applicationName: packetCapture.applicationName,
-                incidents: appAnalysis.incidents
+                incidents: appAnalysis.incidents,
+                automaticRecords: trafficMonitor.automaticHTTPSEvidence.records
             )
             try bytes.write(to: url, options: [.atomic])
             try FileManager.default.setAttributes(

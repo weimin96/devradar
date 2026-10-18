@@ -71,12 +71,14 @@ struct TrafficAnalysisTests {
         verify(evidence.incidents[0].isComplete, "post-spike 20-second window completes")
         verify(evidence.incidents[0].peakUploadBytesPerSecond == 3_100_000, "peak preserved")
         let reportData = try! UploadEvidenceReport.encode(
+            applicationID: "test.input",
             applicationName: "TestInput",
             incidents: evidence.incidents,
+            automaticRecords: [],
             now: origin
         )
         let report = String(decoding: reportData, as: UTF8.self)
-        verify(report.contains("203.0.113.9:443") && report.contains("unavailable"),
+        verify(report.contains("203.0.113.9:443") && report.contains("Do not allocate"),
                "report records endpoints but disclaims destination bytes")
         verify(!report.contains("HTTPBody") && !report.contains("requestPath"),
                "report contains no decrypted request content")
