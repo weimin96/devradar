@@ -171,6 +171,7 @@ final class NetworkTrafficMonitor {
     private var cumulativeByPID: [Int: (download: UInt64, upload: UInt64)] = [:]
     private var cumulativeByApplicationID: [String: (download: UInt64, upload: UInt64)] = [:]
     private var connectionsByPID: [Int: ConnectionSnapshot] = [:]
+    private var lastConnectionInspectionAt: Date?
     private var processNamesByPID: [Int: String] = [:]
     private var lastActiveAtByPID: [Int: Date] = [:]
     private var frameNumber = 0
@@ -250,6 +251,7 @@ final class NetworkTrafficMonitor {
         inspectConnections = enabled
         if !enabled {
             connectionsByPID.removeAll(keepingCapacity: true)
+            lastConnectionInspectionAt = nil
         }
     }
 
@@ -327,6 +329,7 @@ final class NetworkTrafficMonitor {
         if inspectConnections, (frameNumber == 1 || frameNumber % 3 == 0) {
             let connectionSnapshot = Self.connectionSnapshotsForAllProcesses()
             connectionsByPID = connectionSnapshot.snapshots
+            lastConnectionInspectionAt = now
             for (pid, name) in connectionSnapshot.processNames {
                 if processNamesByPID[pid] == nil {
                     processNamesByPID[pid] = name
@@ -416,19 +419,40 @@ final class NetworkTrafficMonitor {
             )
         }
 
+        // The socket inspection runs less frequently than nettop; carry the
+        // actual socket observation time and never call an old snapshot new.
+        let inspectedAt = inspectConnections ? lastConnectionInspectionAt : nil
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.processes = snapshots
             var applicationTotals = self.cumulativeByApplicationID
             self.applications = Self.aggregateApplications(snapshots, cumulativeTotals: &applicationTotals)
             let activeIDs = Set(self.applications.map(\.id))
-            self.uploadAnalysis = self.uploadAnalysis.filter { activeIDs.contains($0.key) }
+            self.uploadAnalysis = self.uploadAnalysis.filter { id, buffer in
+                activeIDs.contains(id) ||
+                    buffer.incidents.contains { now.timeIntervalSince($0.triggeredAt) <= 1800 }
+            }
             for app in self.applications {
                 var buffer = self.uploadAnalysis[app.id] ?? TrafficAnalysisBuffer()
                 buffer.append(
                     at: now,
                     upload: app.uploadBytesPerSecond,
-                    download: app.downloadBytesPerSecond
+                    download: app.downloadBytesPerSecond,
+                    applicationName: app.name,
+                    observedPIDs: app.pids,
+                    connectionSnapshot: inspectedAt.map { observedAt in
+                        EvidenceConnectionSnapshot(
+                            capturedAt: observedAt,
+                            endpoints: Array(app.remoteEndpoints.filter { !$0.isLocal }
+                                .prefix(24).map {
+                                    EvidenceEndpoint(
+                                        address: $0.address,
+                                        transport: $0.transport,
+                                        state: $0.state
+                                    )
+                                })
+                        )
+                    }
                 )
                 self.uploadAnalysis[app.id] = buffer
             }

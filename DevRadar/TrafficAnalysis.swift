@@ -1,6 +1,6 @@
 import Foundation
 
-struct UploadRateSample: Identifiable {
+struct UploadRateSample: Identifiable, Codable {
     let date: Date
     let uploadBytesPerSecond: Int
     let downloadBytesPerSecond: Int
@@ -13,33 +13,108 @@ struct UploadSpike: Identifiable {
     var id: Date { date }
 }
 
+struct EvidenceEndpoint: Codable, Hashable {
+    let address: String
+    let transport: String
+    let state: String?
+}
+
+/// Capturing a socket snapshot does not establish that upload bytes reached
+/// any of these endpoints. Time correlation is the strongest available claim.
+struct EvidenceConnectionSnapshot: Codable, Hashable {
+    let capturedAt: Date
+    let endpoints: [EvidenceEndpoint]
+}
+
+struct UploadIncident: Identifiable, Codable {
+    let id: UUID
+    let applicationName: String
+    let observedPIDs: [Int]
+    let triggeredAt: Date
+    let triggerBytesPerSecond: Int
+    let windowEnd: Date
+    var samples: [UploadRateSample]
+    var connections: [EvidenceConnectionSnapshot]
+    var isComplete: Bool
+    var peakUploadBytesPerSecond: Int {
+        samples.map(\.uploadBytesPerSecond).max() ?? triggerBytesPerSecond
+    }
+}
+
 /// A bounded, in-memory sample window. This uses nettop's application rate
 /// samples, *not* the unattributed system HTTP proxy. Endpoints are separate
 /// socket snapshots and do not carry per-destination byte counters.
 struct TrafficAnalysisBuffer {
     private(set) var samples: [UploadRateSample] = []
     private(set) var spikes: [UploadSpike] = []
+    private(set) var incidents: [UploadIncident] = []
+    private var observedConnections: [EvidenceConnectionSnapshot] = []
     private let maxSamples = 150 // approximately five minutes at 2 s/frame
 
     var peakUploadBytesPerSecond: Int { samples.map(\.uploadBytesPerSecond).max() ?? 0 }
     var currentUploadBytesPerSecond: Int { samples.last?.uploadBytesPerSecond ?? 0 }
 
-    mutating func append(at date: Date, upload: Int, download: Int) {
+    mutating func append(
+        at date: Date,
+        upload: Int,
+        download: Int,
+        applicationName: String = "",
+        observedPIDs: [Int] = [],
+        connectionSnapshot: EvidenceConnectionSnapshot? = nil
+    ) {
         let safeUpload = max(0, upload)
+        if let connectionSnapshot,
+           connectionSnapshot.capturedAt <= date,
+           date.timeIntervalSince(connectionSnapshot.capturedAt) <= 8,
+           observedConnections.last?.capturedAt != connectionSnapshot.capturedAt {
+            observedConnections.append(connectionSnapshot)
+        }
+        observedConnections.removeAll { date.timeIntervalSince($0.capturedAt) > 20 }
+        incidents.removeAll { date.timeIntervalSince($0.triggeredAt) > 1800 }
         // Previous eight observations form a stable, easily explainable
         // baseline; require at least one MiB/s to avoid classifying idle noise.
         let baseline = samples.suffix(8).map(\.uploadBytesPerSecond).sorted()
         let median = baseline.isEmpty ? 0 : baseline[baseline.count / 2]
         let previous = samples.last?.uploadBytesPerSecond ?? 0
         let threshold = max(1_048_576, median * 4)
-        if samples.count >= 4, safeUpload >= threshold, previous < threshold,
-           date.timeIntervalSince(spikes.last?.date ?? .distantPast) >= 20 {
+        let isSpike = samples.count >= 4 && safeUpload >= threshold && previous < threshold &&
+            date.timeIntervalSince(spikes.last?.date ?? .distantPast) >= 20
+        if isSpike {
             spikes.append(UploadSpike(date: date, bytesPerSecond: safeUpload))
         }
-        samples.append(UploadRateSample(
+        let sample = UploadRateSample(
             date: date, uploadBytesPerSecond: safeUpload,
             downloadBytesPerSecond: max(0, download)
-        ))
+        )
+        samples.append(sample)
+        for index in incidents.indices where !incidents[index].isComplete {
+            if date <= incidents[index].windowEnd {
+                incidents[index].samples.append(sample)
+                if let connectionSnapshot,
+                   connectionSnapshot.capturedAt <= date,
+                   date.timeIntervalSince(connectionSnapshot.capturedAt) <= 8,
+                   incidents[index].connections.last?.capturedAt != connectionSnapshot.capturedAt {
+                    incidents[index].connections.append(connectionSnapshot)
+                }
+            }
+            if date >= incidents[index].windowEnd {
+                incidents[index].isComplete = true
+            }
+        }
+        if isSpike {
+            incidents.append(UploadIncident(
+                id: UUID(),
+                applicationName: applicationName,
+                observedPIDs: observedPIDs.sorted(),
+                triggeredAt: date,
+                triggerBytesPerSecond: safeUpload,
+                windowEnd: date.addingTimeInterval(20),
+                samples: samples.filter { date.timeIntervalSince($0.date) <= 16 },
+                connections: observedConnections.filter { date.timeIntervalSince($0.capturedAt) <= 16 },
+                isComplete: false
+            ))
+            if incidents.count > 12 { incidents.removeFirst(incidents.count - 12) }
+        }
         if samples.count > maxSamples { samples.removeFirst(samples.count - maxSamples) }
         if let first = samples.first?.date {
             spikes.removeAll { $0.date < first }
