@@ -10,6 +10,10 @@ enum CaptureInspectorMode {
 enum CaptureInspectorWindow {
     private static var window: NSWindow?
 
+    static func hide() {
+        window?.orderOut(nil)
+    }
+
     static func open(
         mode: CaptureInspectorMode,
         localProxy: LocalProxyManager,
@@ -209,6 +213,12 @@ private struct CaptureInspectorView: View {
                     }
                     if packetCapture.state == .completed {
                         Button("导出 PCAPNG") { packetCapture.saveCapture() }
+                    }
+                    if packetCapture.canCloseSession {
+                        Button("关闭监控", role: .destructive) {
+                            packetCapture.clear()
+                            CaptureInspectorWindow.hide()
+                        }
                     }
                 }
             }

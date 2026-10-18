@@ -193,7 +193,9 @@ struct NetworkMonitorView: View {
     private var captureSession: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Label("抓包 · \(packetCapture.applicationName)", systemImage: "waveform.path")
+                Label(packetCapture.state == .ready
+                    ? "连接监控 · \(packetCapture.applicationName)"
+                    : "抓包 · \(packetCapture.applicationName)", systemImage: "waveform.path")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
                 Spacer()
@@ -210,21 +212,12 @@ struct NetworkMonitorView: View {
                     Button("停止") { packetCapture.stop() }
                         .buttonStyle(.borderless)
                 }
-                if packetCapture.state == .ready || packetCapture.state == .failed {
-                    Button("开始抓包") {
-                        CaptureInspectorWindow.open(
-                            mode: .packets, localProxy: localProxy, packetCapture: packetCapture,
-                            trafficMonitor: trafficMonitor
-                        )
-                    }
-                    .buttonStyle(.borderless)
-                }
                 if packetCapture.state == .completed {
                     Button("导出 PCAPNG") { packetCapture.saveCapture() }
                         .buttonStyle(.borderless)
                 }
-                if packetCapture.state == .completed || packetCapture.state == .failed {
-                    Button("清除") { packetCapture.clear() }
+                if packetCapture.canCloseSession {
+                    Button("关闭", role: .destructive) { packetCapture.clear() }
                         .buttonStyle(.borderless)
                 }
                 Button("查看详情") {
@@ -235,7 +228,9 @@ struct NetworkMonitorView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            Text("已收到 \(packetCapture.packetCount) 条记录 · 不包含 HTTPS 明文")
+            Text(packetCapture.state == .ready
+                ? "正在统计 HTTPS/QUIC 连接 · 原始 PCAPNG 尚未启动"
+                : "已收到 \(packetCapture.packetCount) 条记录 · 不包含 HTTPS 明文")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             if let error = packetCapture.lastError {

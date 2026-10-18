@@ -76,6 +76,12 @@ final class PacketCaptureManager {
         state == .authorizing || state == .starting || state == .capturing || state == .stopping
     }
 
+    /// A prepared connection monitor has no privileged packet capture yet.
+    /// It must be dismissible even when the user never started PCAPNG.
+    var canCloseSession: Bool {
+        state == .ready || state == .completed || state == .failed
+    }
+
     /// Opens the persistent inspector before authorization. A confirmation
     /// dialog inside MenuBarExtra can disappear while the menu is dismissed.
     func prepare(application: ApplicationTraffic) {
