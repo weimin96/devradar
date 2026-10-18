@@ -156,6 +156,7 @@ final class NetworkTrafficMonitor {
     var lastError: String?
     var isRunning = false
     private(set) var uploadAnalysis: [String: TrafficAnalysisBuffer] = [:]
+    let automaticHTTPSEvidence = AutomaticHTTPSEvidenceManager()
 
     private let sampleInterval = 2
     private let activityRetention: TimeInterval = 300
@@ -206,10 +207,12 @@ final class NetworkTrafficMonitor {
         reader?.stop()
         reader = nil
         isRunning = false
+        automaticHTTPSEvidence.stopAll()
     }
 
     func clearTrafficHistory() {
         uploadAnalysis.removeAll()
+        automaticHTTPSEvidence.clearSavedRecords()
         cumulativeByPID.removeAll(keepingCapacity: true)
         cumulativeByApplicationID.removeAll(keepingCapacity: true)
         historyStore.clear()
@@ -434,6 +437,7 @@ final class NetworkTrafficMonitor {
             }
             for app in self.applications {
                 var buffer = self.uploadAnalysis[app.id] ?? TrafficAnalysisBuffer()
+                let previousSpikeID = buffer.incidents.last?.id
                 buffer.append(
                     at: now,
                     upload: app.uploadBytesPerSecond,
@@ -455,6 +459,12 @@ final class NetworkTrafficMonitor {
                     }
                 )
                 self.uploadAnalysis[app.id] = buffer
+                self.automaticHTTPSEvidence.observe(
+                    application: app,
+                    newlyDetectedSpike: previousSpikeID != buffer.incidents.last?.id &&
+                        buffer.incidents.last?.triggeredAt == now,
+                    at: now
+                )
             }
             self.cumulativeByApplicationID = applicationTotals
             self.evaluateNetworkAlerts()

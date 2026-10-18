@@ -37,6 +37,7 @@ struct SettingsView: View {
     @AppStorage("showTerminalButton") private var showTerminal = true
     @AppStorage("networkAlertEnabled") private var networkAlertEnabled = true
     @AppStorage("networkAlertThresholdMBps") private var networkAlertThresholdMBps = 5.0
+    @AppStorage("automaticHTTPSConnectionEvidence") private var automaticHTTPSConnectionEvidence = true
     @AppStorage("proxyDecryptHTTPS") private var proxyDecryptHTTPS = false
     @AppStorage("proxyBodyPreview") private var proxyBodyPreview = false
     @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
@@ -71,6 +72,13 @@ struct SettingsView: View {
             }
 
             Section("网络监控") {
+                Toggle("异常上传时自动记录 HTTPS 连接证据", isOn: $automaticHTTPSConnectionEvidence)
+                    .onChange(of: automaticHTTPSConnectionEvidence) { _, enabled in
+                        if !enabled { trafficMonitor.automaticHTTPSEvidence.stopAll() }
+                    }
+                Text("仅在上传突增或持续超阈值时，对相关 PID 临时监控 30 秒 TCP/UDP 443 字节增量；最多并发 2 个应用，同应用冷却 10 分钟。自动保存本机元数据，7 天最多 50 条。不会解密 HTTPS、修改代理或请求管理员权限。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Toggle("异常上传提醒", isOn: $networkAlertEnabled)
                     .onChange(of: networkAlertEnabled) { _, enabled in
                         if enabled {

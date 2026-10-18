@@ -13,6 +13,7 @@ final class HTTPSConnectionReader {
     private var stdout: Pipe?
     private var pending = Data()
     private var running = false
+    private var lastPublishedAt = Date.distantPast
 
     init(pids: [Int]) {
         self.pids = Array(Set(pids.filter { $0 > 0 })).sorted().prefix(16).map { $0 }
@@ -89,7 +90,8 @@ final class HTTPSConnectionReader {
             pending.removeSubrange(...newLine)
             if tracker.consume(line: line, at: Date()) { latest = true }
         }
-        if latest {
+        if latest, Date().timeIntervalSince(lastPublishedAt) >= 1 {
+            lastPublishedAt = Date()
             onUpdate?(tracker.observed443Connections)
         }
     }

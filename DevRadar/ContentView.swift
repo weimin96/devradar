@@ -206,6 +206,7 @@ struct ContentView: View {
                 Spacer()
                 Button("退出") {
                     packetCapture.stop()
+                    trafficMonitor.automaticHTTPSEvidence.stopAll()
                     localProxy.stopForQuit { restored in
                         if restored {
                             NSApplication.shared.terminate(nil)

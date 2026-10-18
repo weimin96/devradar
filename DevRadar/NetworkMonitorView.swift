@@ -142,6 +142,7 @@ struct NetworkMonitorView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            autoHTTPSRecords
             Divider()
             applicationList
             if packetCapture.state != .idle {
@@ -164,6 +165,29 @@ struct NetworkMonitorView: View {
         .onDisappear {
             trafficMonitor.setConnectionInspectionEnabled(false)
         }
+    }
+
+    private var autoHTTPSRecords: some View {
+        HStack(spacing: 8) {
+            Label("自动 HTTPS 证据", systemImage: "lock.shield")
+                .font(.caption.weight(.medium))
+            if !trafficMonitor.automaticHTTPSEvidence.activeApps.isEmpty {
+                Text("监控中 \(trafficMonitor.automaticHTTPSEvidence.activeApps.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+            Spacer()
+            Text("\(trafficMonitor.automaticHTTPSEvidence.records.count) 条")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Button("查看记录") {
+                AutomaticHTTPSEvidenceWindow.open(manager: trafficMonitor.automaticHTTPSEvidence)
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
     }
 
     private var captureSession: some View {
