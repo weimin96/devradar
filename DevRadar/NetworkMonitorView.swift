@@ -317,6 +317,15 @@ struct NetworkMonitorView: View {
 
                 Spacer()
 
+                Button {
+                    DNSDiagnosticsWindow.open(trafficMonitor: trafficMonitor)
+                } label: {
+                    Label("DNS", systemImage: "globe")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("查看系统 DNS 配置及域名解析诊断")
+
                 if timeRange == .realtime {
                     sortableMetricBadge(
                         field: .download,
@@ -788,6 +797,7 @@ private struct ApplicationTrafficRow: View {
             if isExpanded {
                 ApplicationTrafficDetails(
                     application: application,
+                    trafficMonitor: trafficMonitor,
                     processes: processes,
                     openFiles: openFiles,
                     isLoadingOpenFiles: isLoadingOpenFiles
@@ -822,6 +832,7 @@ private struct ApplicationTrafficRow: View {
 
 private struct ApplicationTrafficDetails: View {
     let application: ApplicationTraffic
+    let trafficMonitor: NetworkTrafficMonitor
     let processes: [ProcessTraffic]
     let openFiles: [OpenProjectFile]
     let isLoadingOpenFiles: Bool
@@ -867,6 +878,15 @@ private struct ApplicationTrafficDetails: View {
                                 Text(state)
                                     .font(.system(size: 9, design: .monospaced))
                                     .foregroundStyle(.tertiary)
+                            }
+                            if let ip = DNSDiagnosticsEngine.endpointIP(endpoint.address) {
+                                Button {
+                                    DNSDiagnosticsWindow.open(trafficMonitor: trafficMonitor, query: ip)
+                                } label: {
+                                    Image(systemName: "globe")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("反向查询 \(ip) 的 DNS 名称")
                             }
                         }
                     }

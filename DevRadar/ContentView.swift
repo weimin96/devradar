@@ -205,6 +205,7 @@ struct ContentView: View {
                 .font(.caption)
                 Spacer()
                 Button("退出") {
+                    DNSDiagnosticsWindow.stopCapture()
                     packetCapture.stop()
                     trafficMonitor.automaticHTTPSEvidence.stopAll()
                     localProxy.stopForQuit { restored in
