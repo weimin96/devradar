@@ -26,6 +26,9 @@ final class PacketCaptureManager {
     var selectedPIDs: [Int] = []
 
     private var directory: URL?
+    private var packetTextLog: URL?
+    private var packetTextOffset: UInt64 = 0
+    private var packetAccumulator = PacketLineAccumulator()
     private var capturePID: pid_t?
     private var timer: Timer?
     private var beganAt: Date?
@@ -47,6 +50,21 @@ final class PacketCaptureManager {
             if Date().timeIntervalSince(modified) > 3600 {
                 try? FileManager.default.removeItem(at: folder)
             }
+        }
+        // Auxiliary logs are created by mktemp, initially owned by root and
+        // then handed to the user. Clean only OUR stale user-owned logs.
+        let tempFiles = (try? FileManager.default.contentsOfDirectory(
+            at: URL(fileURLWithPath: "/private/tmp", isDirectory: true),
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        )) ?? []
+        for file in tempFiles where file.lastPathComponent.hasPrefix("DevRadarPacketText.") {
+            guard let info = try? FileManager.default.attributesOfItem(atPath: file.path),
+                  let owner = info[.ownerAccountID] as? NSNumber,
+                  owner.intValue == Int(getuid()),
+                  let modified = info[.modificationDate] as? Date,
+                  Date().timeIntervalSince(modified) > 3600
+            else { continue }
+            try? FileManager.default.removeItem(at: file)
         }
     }
 
@@ -71,6 +89,8 @@ final class PacketCaptureManager {
         selectedRemoteEndpoints = Array(application.remoteEndpoints.filter { !$0.isLocal }.map(\.address).prefix(6))
         packetLines = []
         packetCount = 0
+        packetAccumulator.reset()
+        packetTextOffset = 0
         lastError = nil
         state = .ready
     }
@@ -89,6 +109,8 @@ final class PacketCaptureManager {
         discardFinishedSession()
         packetLines = []
         packetCount = 0
+        packetAccumulator.reset()
+        packetTextOffset = 0
         lastError = nil
         state = .authorizing
 
@@ -110,7 +132,7 @@ final class PacketCaptureManager {
             let arguments = [
                 "/usr/sbin/tcpdump", "-Z", username,
                 "-i", "pktap,all", "--apple-md-filter", expression,
-                "-n", "-s", "256", "-U", "-c", "10000",
+                "-n", "-q", "-l", "--print", "-g", "-s", "256", "-U", "-c", "10000",
                 "-G", "600", "-W", "1", "-w", capturePath, filter
             ]
             let invocation = arguments.map(Self.shellQuote).joined(separator: " ")
@@ -129,13 +151,17 @@ final class PacketCaptureManager {
             // Never have a privileged shell truncate a user-controlled path.
             let command = """
             diagnostic=$(/usr/bin/mktemp -t DevRadarCapture) || exit 1
-            /bin/sh -c \(Self.shellQuote("umask 077; ulimit -f 32768; exec \(invocation)")) </dev/null >/dev/null 2>"$diagnostic" &
+            packetlog=$(/usr/bin/mktemp -p /private/tmp -t DevRadarPacketText) || exit 1
+            exec 3>"$packetlog"
+            /usr/sbin/chown \(Self.shellQuote(username)) "$packetlog" || exit 1
+            /bin/sh -c \(Self.shellQuote("umask 077; ulimit -f 32768; exec \(invocation)")) </dev/null >&3 2>"$diagnostic" &
             child=$!
             sleep 2
             if kill -0 "$child" 2>/dev/null; then
-                printf 'STARTED:%s' "$child"
+                printf 'STARTED:%s:%s' "$child" "$packetlog"
             else
                 printf 'FAILED:%s' "$(/usr/bin/head -c 500 "$diagnostic")"
+                /bin/rm -f "$packetlog"
             fi
             /bin/rm -f "$diagnostic"
             """
@@ -160,10 +186,13 @@ final class PacketCaptureManager {
                     DispatchQueue.main.async {
                         guard let self, self.directory == folder else { return }
                         let response = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let startParts = response.split(separator: ":", maxSplits: 2)
                         guard process.terminationStatus == 0,
-                              response.hasPrefix("STARTED:"),
-                              let pid = Int32(response.dropFirst("STARTED:".count)),
-                              pid > 0 else {
+                              startParts.count == 3,
+                              startParts[0] == "STARTED",
+                              let pid = Int32(startParts[1]), pid > 0,
+                              (startParts[2].hasPrefix("/private/tmp/DevRadarPacketText.") ||
+                               startParts[2].hasPrefix("/tmp/DevRadarPacketText.")) else {
                             self.lastError = response.hasPrefix("FAILED:")
                                 ? "抓包引擎启动失败：\(response.dropFirst("FAILED:".count).isEmpty ? "tcpdump 进程提前退出且未返回诊断内容" : String(response.dropFirst("FAILED:".count)))"
                                 : errorText.isEmpty ? "管理员授权失败或被取消：\(response)" : errorText
@@ -171,6 +200,7 @@ final class PacketCaptureManager {
                             return
                         }
                         self.capturePID = pid
+                        self.packetTextLog = URL(fileURLWithPath: String(startParts[2]))
                         self.beganAt = Date()
                         // An AppleScript exit code of 0 only means the shell
                         // started a background job, NOT that tcpdump started.
@@ -263,34 +293,34 @@ final class PacketCaptureManager {
         if let beganAt, Date().timeIntervalSince(beganAt) >= maximumDuration, state == .capturing {
             stop()
         }
-        if Date().timeIntervalSince(lastReadAt) >= 4 {
+        if Date().timeIntervalSince(lastReadAt) >= 1 {
             readCapturedPackets()
         }
     }
 
     private func readCapturedPackets() {
-        guard !readingPackets, let source = captureFile() else { return }
+        guard !readingPackets, let source = packetTextLog else { return }
         readingPackets = true
         lastReadAt = Date()
+        let offset = packetTextOffset
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/sbin/tcpdump")
-            process.arguments = ["-n", "-q", "-c", "10000", "-r", source.path]
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
             do {
-                try process.run()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                let lines = String(decoding: data, as: UTF8.self)
-                    .split(whereSeparator: \.isNewline).map(String.init)
+                let file = try FileHandle(forReadingFrom: source)
+                defer { try? file.close() }
+                try file.seek(toOffset: offset)
+                let data = try file.read(upToCount: 256 * 1024) ?? Data()
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.readingPackets = false
-                    if !lines.isEmpty {
-                        self.packetCount = lines.count
-                        self.packetLines = Array(lines.suffix(200))
+                    guard self.packetTextLog == source else { return }
+                    self.packetTextOffset += UInt64(data.count)
+                    self.packetAccumulator.ingest(data)
+                    self.packetCount = self.packetAccumulator.count
+                    self.packetLines = self.packetAccumulator.lines
+                    // A busy capture may leave more than one read-sized
+                    // chunk at shutdown. Drain it without rescanning the file.
+                    if self.state == .completed && data.count == 256 * 1024 {
+                        self.readCapturedPackets()
                     }
                 }
             } catch {
@@ -317,6 +347,12 @@ final class PacketCaptureManager {
         timer?.invalidate()
         timer = nil
         capturePID = nil
+        if let packetTextLog {
+            try? FileManager.default.removeItem(at: packetTextLog)
+            self.packetTextLog = nil
+        }
+        packetTextOffset = 0
+        packetAccumulator.reset()
         if let directory {
             try? FileManager.default.removeItem(at: directory)
             self.directory = nil

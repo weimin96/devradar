@@ -13,6 +13,9 @@ enum LocalProxyState {
 struct LocalProxyEvent: Decodable, Identifiable {
     var id = UUID()
     var type: String
+    var requestID: String?
+    var timestamp: String?
+    var durationMs: Int64?
     var method: String?
     var host: String?
     var path: String?
@@ -24,7 +27,8 @@ struct LocalProxyEvent: Decodable, Identifiable {
     var message: String?
 
     private enum CodingKeys: String, CodingKey {
-        case type, method, host, path, status, uploadBytes, downloadBytes
+        case type, requestID = "requestId", timestamp, durationMs
+        case method, host, path, status, uploadBytes, downloadBytes
         case contentType, preview, message
     }
 }
@@ -56,6 +60,7 @@ final class LocalProxyManager {
 
     var isBusy: Bool { state == .starting || state == .listening }
     var isListening: Bool { state == .listening }
+    var retainedLimit: Int { 2000 }
 
     static var caDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -322,15 +327,61 @@ final class LocalProxyManager {
     }
 
     private func consume(_ data: Data) {
-        guard let result = try? JSONDecoder().decode(LocalProxyEvent.self, from: data) else { return }
+        guard var result = try? JSONDecoder().decode(LocalProxyEvent.self, from: data) else { return }
         if result.type == "ready", let address = result.host {
             proxyAddress = address
             state = .listening
             return
         }
-        if result.type == "request" { requestCount += 1 }
+        if result.type == "started" {
+            requestCount += 1
+            events.append(result)
+        } else if let requestID = result.requestID,
+                  let index = events.firstIndex(where: { $0.requestID == requestID }) {
+            result.id = events[index].id
+            events[index] = result
+        } else {
+            if result.type == "request" || result.type == "error" || result.type == "upgrade" {
+                requestCount += 1
+            }
+            events.append(result)
+        }
         uploadedBytes += max(0, result.uploadBytes ?? 0)
-        events.append(result)
-        if events.count > 150 { events.removeFirst(events.count - 150) }
+        if events.count > retainedLimit {
+            events.removeFirst(events.count - retainedLimit)
+        }
+    }
+
+    func exportSession() {
+        guard !events.isEmpty else {
+            lastError = "当前没有可导出的记录"
+            return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "DevRadar-Proxy-Session.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            // Deliberately metadata-only; no path, headers, bodies or full URLs.
+            // The original event previews remain session-only in memory.
+            let records = events.map { event in
+                ProxySessionExport.Record(
+                    type: event.type,
+                    timestamp: event.timestamp,
+                    method: event.method,
+                    host: event.host?.contains("@") == true ? nil : event.host,
+                    status: event.status,
+                    durationMs: event.durationMs,
+                    uploadBytes: event.uploadBytes,
+                    downloadBytes: event.downloadBytes,
+                    attribution: "unverified"
+                )
+            }
+            let json = try ProxySessionExport.encode(records: records, totalRequests: requestCount)
+            try json.write(to: url, options: [.atomic])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            lastError = nil
+        } catch {
+            lastError = "导出会话失败：\(error.localizedDescription)"
+        }
     }
 }

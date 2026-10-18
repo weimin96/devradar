@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -37,6 +38,9 @@ import (
 const maxBodySample = 2048
 
 type event struct {
+	RequestID     string `json:"requestId,omitempty"`
+	Timestamp     string `json:"timestamp,omitempty"`
+	DurationMs    int64  `json:"durationMs,omitempty"`
 	Type          string `json:"type"`
 	Method        string `json:"method,omitempty"`
 	Host          string `json:"host,omitempty"`
@@ -214,6 +218,17 @@ type proxy struct {
 	transport     *http.Transport
 	localAddress  string
 	upstreamProxy *url.URL
+	sequence      atomic.Uint64
+}
+
+func (p *proxy) beginRequest(method string, target *url.URL) (string, time.Time) {
+	started := time.Now()
+	id := fmt.Sprintf("%d", p.sequence.Add(1))
+	p.report.send(event{
+		Type: "started", RequestID: id, Timestamp: started.UTC().Format(time.RFC3339Nano),
+		Method: method, Host: target.Host, Path: truncate(target.EscapedPath(), 384),
+	})
+	return id, started
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -276,6 +291,7 @@ func (p *proxy) forward(w http.ResponseWriter, request *http.Request, forcedSche
 		p.forwardUpgrade(w, request, target)
 		return
 	}
+	requestID, started := p.beginRequest(request.Method, target)
 	outgoing := request.Clone(context.Background())
 	copyURL := *target
 	outgoing.URL = &copyURL
@@ -288,7 +304,11 @@ func (p *proxy) forward(w http.ResponseWriter, request *http.Request, forcedSche
 	}
 	resp, err := p.transport.RoundTrip(outgoing)
 	if err != nil {
-		p.report.send(event{Type: "error", Method: request.Method, Host: target.Host, Message: err.Error()})
+		p.report.send(event{
+			Type: "error", RequestID: requestID, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			DurationMs: time.Since(started).Milliseconds(),
+			Method:     request.Method, Host: target.Host, Message: truncate(err.Error(), 140),
+		})
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
@@ -312,7 +332,9 @@ func (p *proxy) forward(w http.ResponseWriter, request *http.Request, forcedSche
 		path = path[:384]
 	}
 	p.report.send(event{
-		Type: "request", Method: request.Method, Host: target.Host, Path: path,
+		RequestID: requestID, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		DurationMs: time.Since(started).Milliseconds(),
+		Type:       "request", Method: request.Method, Host: target.Host, Path: path,
 		Status: resp.StatusCode, UploadBytes: bytesSent, DownloadBytes: downloaded,
 		ContentType: truncate(request.Header.Get("Content-Type"), 100), Preview: previewText,
 	})
@@ -329,6 +351,7 @@ func headerHasToken(header, token string) bool {
 
 func (p *proxy) forwardUpgrade(w http.ResponseWriter, request *http.Request, target *url.URL) {
 	destination := *target
+	requestID, started := p.beginRequest(request.Method, target)
 	// WebSocket uses HTTP/1.1 Upgrade semantics; do not negotiate HTTP/2
 	// with the upstream for this connection.
 	upgradeTransport := p.transport.Clone()
@@ -343,7 +366,9 @@ func (p *proxy) forwardUpgrade(w http.ResponseWriter, request *http.Request, tar
 		},
 		ModifyResponse: func(response *http.Response) error {
 			p.report.send(event{
-				Type: "upgrade", Method: request.Method, Host: destination.Host,
+				RequestID: requestID, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				DurationMs: time.Since(started).Milliseconds(),
+				Type:       "upgrade", Method: request.Method, Host: destination.Host,
 				Path: truncate(destination.EscapedPath(), 384), Status: response.StatusCode,
 				Message: "升级连接透明转发；流式内容不做解析或进程归属",
 			})
@@ -351,7 +376,9 @@ func (p *proxy) forwardUpgrade(w http.ResponseWriter, request *http.Request, tar
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			p.report.send(event{
-				Type: "error", Method: r.Method, Host: destination.Host,
+				RequestID: requestID, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				DurationMs: time.Since(started).Milliseconds(),
+				Type:       "error", Method: r.Method, Host: destination.Host,
 				Message: "upgrade forwarding failed: " + truncate(err.Error(), 140),
 			})
 			http.Error(w, "upstream upgrade failed", http.StatusBadGateway)

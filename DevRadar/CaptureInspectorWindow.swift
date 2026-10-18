@@ -50,6 +50,11 @@ private enum RequestFilter: String, CaseIterable {
     case errors = "异常"
 }
 
+private struct PacketPreviewRow: Identifiable {
+    let id: Int
+    let line: String
+}
+
 private struct CaptureInspectorView: View {
     let mode: CaptureInspectorMode
     var localProxy: LocalProxyManager
@@ -84,9 +89,11 @@ private struct CaptureInspectorView: View {
         return localProxy.events.first { $0.id == selectedEventID }
     }
 
-    private var packetLines: [String] {
-        packetCapture.packetLines.filter {
-            search.isEmpty || $0.localizedCaseInsensitiveContains(search)
+    private var packetRecords: [PacketPreviewRow] {
+        let firstNumber = max(0, packetCapture.packetCount - packetCapture.packetLines.count)
+        return packetCapture.packetLines.enumerated().compactMap { offset, line in
+            guard search.isEmpty || line.localizedCaseInsensitiveContains(search) else { return nil }
+            return PacketPreviewRow(id: firstNumber + offset + 1, line: line)
         }
     }
 
@@ -105,15 +112,15 @@ private struct CaptureInspectorView: View {
                                     eventRow(event)
                                 }
                             } else {
-                                ForEach(Array(packetLines.enumerated()), id: \.offset) { index, line in
-                                    packetRow(index: index, line: line)
+                                ForEach(packetRecords) { item in
+                                    packetRow(index: item.id, line: item.line)
                                 }
                             }
                         }
                         .padding(6)
                     }
                     .overlay {
-                        if isProxy ? events.isEmpty : packetLines.isEmpty {
+                        if isProxy ? events.isEmpty : packetRecords.isEmpty {
                             if isProxy {
                                 proxyEmptyState
                             } else if packetCapture.state == .ready || packetCapture.state == .failed {
@@ -177,6 +184,9 @@ private struct CaptureInspectorView: View {
                     } else {
                         Button("清除记录") { localProxy.clear() }
                     }
+                    Button("导出会话 JSON") { localProxy.exportSession() }
+                        .disabled(localProxy.events.isEmpty)
+                        .help("只导出域名、方法、状态、耗时、流量；不导出路径、Headers、正文")
                 } else {
                     if packetCapture.state == .ready || packetCapture.state == .failed {
                         Button(packetCapture.state == .failed ? "重新开始抓包" : "开始抓包") {
@@ -200,6 +210,9 @@ private struct CaptureInspectorView: View {
                     .foregroundStyle(.orange)
                 HStack(spacing: 16) {
                     Label("\(localProxy.requestCount) 请求", systemImage: "list.bullet.rectangle")
+                    if localProxy.requestCount > localProxy.retainedLimit {
+                        Text("仅展示最近 \(localProxy.retainedLimit) 条")
+                    }
                     Label(
                         "上传 \(ByteCountFormatter.string(fromByteCount: localProxy.uploadedBytes, countStyle: .file))",
                         systemImage: "arrow.up"
@@ -459,6 +472,15 @@ private struct CaptureInspectorView: View {
                         Text("\(status)")
                             .font(.caption.monospacedDigit())
                     }
+                    if let duration = event.durationMs {
+                        Text("\(duration) ms")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else if event.type == "started" {
+                        Text("进行中")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                     if let bytes = event.uploadBytes, bytes > 0 {
                         Text("↑ \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                             .font(.caption2.monospacedDigit())
@@ -479,7 +501,7 @@ private struct CaptureInspectorView: View {
             selectedPacket = index
         } label: {
             HStack(alignment: .top, spacing: 8) {
-                Text("\(index + 1)")
+                Text("\(index)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
                     .frame(width: 34, alignment: .trailing)
@@ -504,6 +526,15 @@ private struct CaptureInspectorView: View {
                         .font(.headline)
                     detailField("进程归属", "来源未识别（系统代理流量）")
                     detailField("方法 / 类型", event.method ?? event.type)
+                    detailField("请求状态", event.type == "started" ? "进行中" :
+                        event.type == "request" ? "已完成" :
+                        event.type == "error" ? "失败" : event.type)
+                    if let timestamp = event.timestamp {
+                        detailField("事件时间 (UTC)", timestamp)
+                    }
+                    if let duration = event.durationMs {
+                        detailField("请求耗时", "\(duration) ms")
+                    }
                     detailField("主机", event.host ?? "—")
                     detailField("路径", event.path ?? "—")
                     detailField("响应状态", event.status.map(String.init) ?? "—")
@@ -523,12 +554,13 @@ private struct CaptureInspectorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
             }
-        } else if !isProxy, let selectedPacket, packetLines.indices.contains(selectedPacket) {
+        } else if !isProxy, let selectedPacket,
+                  let selectedLine = packetRecords.first(where: { $0.id == selectedPacket })?.line {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("数据包 #\(selectedPacket + 1)")
+                    Text("数据包 #\(selectedPacket)")
                         .font(.headline)
-                    Text(packetLines[selectedPacket])
+                    Text(selectedLine)
                         .font(.body.monospaced())
                         .textSelection(.enabled)
                 }
