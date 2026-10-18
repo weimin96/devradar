@@ -18,6 +18,7 @@ enum PacketCaptureState: String {
 final class PacketCaptureManager {
     var state = PacketCaptureState.idle
     var applicationName = ""
+    var selectedApplicationID = ""
     var packetLines: [String] = []
     var packetCount = 0
     var lastError: String?
@@ -85,6 +86,7 @@ final class PacketCaptureManager {
         discardFinishedSession()
         selectedPIDs = pids
         applicationName = application.name
+        selectedApplicationID = application.id
         selectedConnectionCount = application.connectionCount
         selectedRemoteEndpoints = Array(application.remoteEndpoints.filter { !$0.isLocal }.map(\.address).prefix(6))
         packetLines = []
@@ -239,6 +241,7 @@ final class PacketCaptureManager {
         discardFinishedSession()
         state = .idle
         applicationName = ""
+        selectedApplicationID = ""
         selectedPIDs = []
         selectedConnectionCount = 0
         selectedRemoteEndpoints = []

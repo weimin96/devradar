@@ -155,6 +155,7 @@ final class NetworkTrafficMonitor {
     var history7DayTotals = TrafficTotals.zero
     var lastError: String?
     var isRunning = false
+    private(set) var uploadAnalysis: [String: TrafficAnalysisBuffer] = [:]
 
     private let sampleInterval = 2
     private let activityRetention: TimeInterval = 300
@@ -207,6 +208,7 @@ final class NetworkTrafficMonitor {
     }
 
     func clearTrafficHistory() {
+        uploadAnalysis.removeAll()
         cumulativeByPID.removeAll(keepingCapacity: true)
         cumulativeByApplicationID.removeAll(keepingCapacity: true)
         historyStore.clear()
@@ -419,6 +421,17 @@ final class NetworkTrafficMonitor {
             self.processes = snapshots
             var applicationTotals = self.cumulativeByApplicationID
             self.applications = Self.aggregateApplications(snapshots, cumulativeTotals: &applicationTotals)
+            let activeIDs = Set(self.applications.map(\.id))
+            self.uploadAnalysis = self.uploadAnalysis.filter { activeIDs.contains($0.key) }
+            for app in self.applications {
+                var buffer = self.uploadAnalysis[app.id] ?? TrafficAnalysisBuffer()
+                buffer.append(
+                    at: now,
+                    upload: app.uploadBytesPerSecond,
+                    download: app.downloadBytesPerSecond
+                )
+                self.uploadAnalysis[app.id] = buffer
+            }
             self.cumulativeByApplicationID = applicationTotals
             self.evaluateNetworkAlerts()
             self.historyStore.record(applications: self.applications)

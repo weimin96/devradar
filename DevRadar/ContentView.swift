@@ -213,7 +213,8 @@ struct ContentView: View {
                             CaptureInspectorWindow.open(
                                 mode: .proxy,
                                 localProxy: localProxy,
-                                packetCapture: packetCapture
+                                packetCapture: packetCapture,
+                                trafficMonitor: trafficMonitor
                             )
                         }
                     }

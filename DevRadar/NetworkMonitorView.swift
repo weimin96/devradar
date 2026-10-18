@@ -24,19 +24,27 @@ private enum NetworkSortField {
 private func beginProxyCapture(
     _ application: ApplicationTraffic,
     localProxy: LocalProxyManager,
-    packetCapture: PacketCaptureManager
+    packetCapture: PacketCaptureManager,
+    trafficMonitor: NetworkTrafficMonitor
 ) {
     localProxy.start(application: application)
-    CaptureInspectorWindow.open(mode: .proxy, localProxy: localProxy, packetCapture: packetCapture)
+    CaptureInspectorWindow.open(
+        mode: .proxy, localProxy: localProxy, packetCapture: packetCapture,
+        trafficMonitor: trafficMonitor
+    )
 }
 
 private func beginPacketCapture(
     _ application: ApplicationTraffic,
     localProxy: LocalProxyManager,
-    packetCapture: PacketCaptureManager
+    packetCapture: PacketCaptureManager,
+    trafficMonitor: NetworkTrafficMonitor
 ) {
     packetCapture.prepare(application: application)
-    CaptureInspectorWindow.open(mode: .packets, localProxy: localProxy, packetCapture: packetCapture)
+    CaptureInspectorWindow.open(
+        mode: .packets, localProxy: localProxy, packetCapture: packetCapture,
+        trafficMonitor: trafficMonitor
+    )
 }
 
 struct NetworkMonitorView: View {
@@ -181,7 +189,8 @@ struct NetworkMonitorView: View {
                 if packetCapture.state == .ready || packetCapture.state == .failed {
                     Button("开始抓包") {
                         CaptureInspectorWindow.open(
-                            mode: .packets, localProxy: localProxy, packetCapture: packetCapture
+                            mode: .packets, localProxy: localProxy, packetCapture: packetCapture,
+                            trafficMonitor: trafficMonitor
                         )
                     }
                     .buttonStyle(.borderless)
@@ -196,7 +205,8 @@ struct NetworkMonitorView: View {
                 }
                 Button("查看详情") {
                     CaptureInspectorWindow.open(
-                        mode: .packets, localProxy: localProxy, packetCapture: packetCapture
+                        mode: .packets, localProxy: localProxy, packetCapture: packetCapture,
+                        trafficMonitor: trafficMonitor
                     )
                 }
                 .buttonStyle(.borderless)
@@ -230,7 +240,8 @@ struct NetworkMonitorView: View {
                 }
                 Button("查看详情") {
                     CaptureInspectorWindow.open(
-                        mode: .proxy, localProxy: localProxy, packetCapture: packetCapture
+                        mode: .proxy, localProxy: localProxy, packetCapture: packetCapture,
+                        trafficMonitor: trafficMonitor
                     )
                 }
                 .buttonStyle(.borderless)
@@ -490,7 +501,8 @@ struct NetworkMonitorView: View {
                             application: app,
                             liveApplication: trafficMonitor.applications.first { $0.id == app.id },
                             packetCapture: packetCapture,
-                            localProxy: localProxy
+                            localProxy: localProxy,
+                            trafficMonitor: trafficMonitor
                         )
                         if app.id != visibleHistoricalApplications.last?.id {
                             Divider()
@@ -509,6 +521,7 @@ private struct HistoricalApplicationTrafficRow: View {
     let liveApplication: ApplicationTraffic?
     var packetCapture: PacketCaptureManager
     var localProxy: LocalProxyManager
+    var trafficMonitor: NetworkTrafficMonitor
     @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
 
     private var icon: NSImage {
@@ -556,11 +569,11 @@ private struct HistoricalApplicationTrafficRow: View {
             Menu {
                 if let liveApplication {
                     Button("抓取当前应用数据包（无需代理）") {
-                        beginPacketCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                        beginPacketCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
                     }
                     .disabled(packetCapture.isBusy)
                     Button("分析系统代理 HTTPS（不限应用）") {
-                        beginProxyCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                        beginProxyCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
                     }
                     .disabled(localProxy.isBusy)
                 } else {
@@ -587,11 +600,11 @@ private struct HistoricalApplicationTrafficRow: View {
         .contextMenu {
             if let liveApplication {
                 Button("抓取当前应用数据包（无需代理）") {
-                    beginPacketCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                    beginPacketCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
                 }
                 .disabled(packetCapture.isBusy)
                 Button("分析系统代理 HTTPS（不限应用）") {
-                    beginProxyCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                    beginProxyCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
                 }
                 .disabled(localProxy.isBusy)
             }
@@ -728,11 +741,11 @@ private struct ApplicationTrafficRow: View {
 
                 Menu {
                     Button("抓取当前应用数据包（无需代理）") {
-                        beginPacketCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+                        beginPacketCapture(application, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
                     }
                     .disabled(packetCapture.isBusy)
                     Button("分析系统代理 HTTPS（不限应用）") {
-                        beginProxyCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+                        beginProxyCapture(application, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
                     }
                     .disabled(localProxy.isBusy)
                     Divider()
@@ -765,11 +778,11 @@ private struct ApplicationTrafficRow: View {
         }
         .contextMenu {
             Button("抓取当前应用数据包（无需代理）") {
-                beginPacketCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+                beginPacketCapture(application, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
             }
             .disabled(packetCapture.isBusy)
             Button("分析系统代理 HTTPS（不限应用）") {
-                beginProxyCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+                beginProxyCapture(application, localProxy: localProxy, packetCapture: packetCapture, trafficMonitor: trafficMonitor)
             }
             .disabled(localProxy.isBusy)
             Divider()

@@ -13,12 +13,14 @@ enum CaptureInspectorWindow {
     static func open(
         mode: CaptureInspectorMode,
         localProxy: LocalProxyManager,
-        packetCapture: PacketCaptureManager
+        packetCapture: PacketCaptureManager,
+        trafficMonitor: NetworkTrafficMonitor
     ) {
         let view = CaptureInspectorView(
             mode: mode,
             localProxy: localProxy,
-            packetCapture: packetCapture
+            packetCapture: packetCapture,
+            trafficMonitor: trafficMonitor
         )
         if let window {
             window.contentView = NSHostingView(rootView: view)
@@ -59,6 +61,7 @@ private struct CaptureInspectorView: View {
     let mode: CaptureInspectorMode
     var localProxy: LocalProxyManager
     var packetCapture: PacketCaptureManager
+    var trafficMonitor: NetworkTrafficMonitor
 
     @State private var search = ""
     @State private var filter = RequestFilter.all
@@ -176,6 +179,12 @@ private struct CaptureInspectorView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button("分析概览") {
+                    selectedEventID = nil
+                    selectedPacket = nil
+                }
+                .buttonStyle(.borderless)
+                .help("返回上传趋势与目的地统计")
                 status
                 if isProxy {
                     if localProxy.isBusy {
@@ -360,7 +369,8 @@ private struct CaptureInspectorView: View {
                     Button("改用当前应用原始抓包（无需代理）") {
                         packetCapture.prepare(application: application)
                         CaptureInspectorWindow.open(
-                            mode: .packets, localProxy: localProxy, packetCapture: packetCapture
+                            mode: .packets, localProxy: localProxy, packetCapture: packetCapture,
+                            trafficMonitor: trafficMonitor
                         )
                     }
                     .buttonStyle(.borderedProminent)
@@ -568,7 +578,12 @@ private struct CaptureInspectorView: View {
                 .padding(20)
             }
         } else {
-            ContentUnavailableView("选择一条记录查看详情", systemImage: "doc.text.magnifyingglass")
+            CaptureAnalyticsView(
+                mode: mode,
+                trafficMonitor: trafficMonitor,
+                packetCapture: packetCapture,
+                localProxy: localProxy
+            )
         }
     }
 
