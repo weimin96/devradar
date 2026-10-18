@@ -21,12 +21,35 @@ private enum NetworkSortField {
     case upload
 }
 
+private func beginProxyCapture(
+    _ application: ApplicationTraffic,
+    localProxy: LocalProxyManager,
+    packetCapture: PacketCaptureManager
+) {
+    localProxy.start(application: application)
+    CaptureInspectorWindow.open(mode: .proxy, localProxy: localProxy, packetCapture: packetCapture)
+}
+
+private func beginPacketCapture(
+    _ application: ApplicationTraffic,
+    localProxy: LocalProxyManager,
+    packetCapture: PacketCaptureManager
+) {
+    packetCapture.prepare(application: application)
+    CaptureInspectorWindow.open(mode: .packets, localProxy: localProxy, packetCapture: packetCapture)
+}
+
 struct NetworkMonitorView: View {
     var trafficMonitor: NetworkTrafficMonitor
+    var packetCapture: PacketCaptureManager
+    var localProxy: LocalProxyManager
     @State private var searchText = ""
     @State private var timeRange = NetworkTimeRange.realtime
     @State private var sortField = NetworkSortField.upload
     @State private var sortAscending = false
+    // Live byte rates change every two seconds. Keep the application's visual
+    // position fixed so the action menu cannot move away while being clicked.
+    @State private var stableApplicationOrder: [String] = []
     @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
 
     private var realtimeApplications: [ApplicationTraffic] {
@@ -51,13 +74,12 @@ struct NetworkMonitorView: View {
             return fields.compactMap { $0?.lowercased() }.contains { $0.contains(query) }
         }
 
+        let ranks = Dictionary(uniqueKeysWithValues: stableApplicationOrder.enumerated().map { ($0.element, $0.offset) })
         return matching.sorted { lhs, rhs in
-            let left = realtimeSortValue(lhs)
-            let right = realtimeSortValue(rhs)
-            if left != right {
-                return sortAscending ? left < right : left > right
-            }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            let leftRank = ranks[lhs.id] ?? Int.max
+            let rightRank = ranks[rhs.id] ?? Int.max
+            if leftRank != rightRank { return leftRank < rightRank }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
     }
 
@@ -114,14 +136,136 @@ struct NetworkMonitorView: View {
             header
             Divider()
             applicationList
+            if packetCapture.state != .idle {
+                Divider()
+                captureSession
+            }
+            if localProxy.state != .idle {
+                Divider()
+                proxySession
+            }
         }
         .onAppear {
             trafficMonitor.start()
             trafficMonitor.setConnectionInspectionEnabled(true)
+            updateStableOrder()
+        }
+        .onChange(of: Set(realtimeApplications.map(\.id))) { _, _ in
+            updateStableOrder()
         }
         .onDisappear {
             trafficMonitor.setConnectionInspectionEnabled(false)
         }
+    }
+
+    private var captureSession: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Label("抓包 · \(packetCapture.applicationName)", systemImage: "waveform.path")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                Text(packetCapture.state == .capturing ? "捕获中" :
+                     packetCapture.state == .authorizing ? "等待授权" :
+                     packetCapture.state == .starting ? "启动中" :
+                     packetCapture.state == .ready ? "等待开始" :
+                     packetCapture.state == .stopping ? "正在结束" :
+                     packetCapture.state == .completed ? "已结束" :
+                     packetCapture.state == .failed ? "失败" : "未启动")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if packetCapture.state == .capturing {
+                    Button("停止") { packetCapture.stop() }
+                        .buttonStyle(.borderless)
+                }
+                if packetCapture.state == .ready || packetCapture.state == .failed {
+                    Button("开始抓包") {
+                        CaptureInspectorWindow.open(
+                            mode: .packets, localProxy: localProxy, packetCapture: packetCapture
+                        )
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if packetCapture.state == .completed {
+                    Button("导出 PCAPNG") { packetCapture.saveCapture() }
+                        .buttonStyle(.borderless)
+                }
+                if packetCapture.state == .completed || packetCapture.state == .failed {
+                    Button("清除") { packetCapture.clear() }
+                        .buttonStyle(.borderless)
+                }
+                Button("查看详情") {
+                    CaptureInspectorWindow.open(
+                        mode: .packets, localProxy: localProxy, packetCapture: packetCapture
+                    )
+                }
+                .buttonStyle(.borderless)
+            }
+            Text("已收到 \(packetCapture.packetCount) 条记录 · 不包含 HTTPS 明文")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if let error = packetCapture.lastError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(10)
+    }
+
+    private var proxySession: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Label("系统代理 · 来源未识别", systemImage: "network.badge.shield.half.filled")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                if localProxy.isBusy {
+                    Button("停止") { localProxy.stop() }
+                        .buttonStyle(.borderless)
+                } else {
+                    Button("清除") { localProxy.clear() }
+                        .buttonStyle(.borderless)
+                }
+                Button("查看详情") {
+                    CaptureInspectorWindow.open(
+                        mode: .proxy, localProxy: localProxy, packetCapture: packetCapture
+                    )
+                }
+                .buttonStyle(.borderless)
+            }
+            if localProxy.isListening {
+                HStack {
+                    Text("代理：\(localProxy.proxyAddress)")
+                        .font(.caption2.monospaced())
+                    Spacer()
+                    Button("复制代理环境变量") { localProxy.copyProxyEnvironment() }
+                        .buttonStyle(.borderless)
+                        .font(.caption2)
+                }
+                Text("需要让目标应用主动使用该代理，已有连接不会自动改道。任意配置相同地址的应用都能进入此会话。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(localProxy.state == .starting ? "正在启动本机代理…" : "代理已停止")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Text("\(localProxy.requestCount) 个 HTTP 请求")
+                Spacer()
+                Text("上传 \(ByteCountFormatter.string(fromByteCount: localProxy.uploadedBytes, countStyle: .file))")
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            if let error = localProxy.lastError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(Color(nsColor: .systemRed))
+            }
+        }
+        .padding(10)
     }
 
     private var header: some View {
@@ -217,6 +361,27 @@ struct NetworkMonitorView: View {
         }
     }
 
+    private func updateStableOrder(forceSort: Bool = false) {
+        let current = realtimeApplications
+        let ids = Set(current.map(\.id))
+        if forceSort || stableApplicationOrder.isEmpty {
+            stableApplicationOrder = current.sorted { lhs, rhs in
+                let left = realtimeSortValue(lhs)
+                let right = realtimeSortValue(rhs)
+                if left != right { return sortAscending ? left < right : left > right }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }.map(\.id)
+            return
+        }
+        let retained = stableApplicationOrder.filter { ids.contains($0) }
+        let oldIDs = Set(retained)
+        let newcomers = current.filter { !oldIDs.contains($0.id) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .map(\.id)
+        let next = retained + newcomers
+        if next != stableApplicationOrder { stableApplicationOrder = next }
+    }
+
     private func historicalSortValue(_ application: HistoricalApplicationTraffic) -> UInt64 {
         switch sortField {
         case .download:
@@ -241,6 +406,7 @@ struct NetworkMonitorView: View {
                 sortField = field
                 sortAscending = false
             }
+            if timeRange == .realtime { updateStableOrder(forceSort: true) }
         } label: {
             MetricBadge(
                 title: title,
@@ -283,7 +449,9 @@ struct NetworkMonitorView: View {
                         ApplicationTrafficRow(
                             application: app,
                             processes: trafficMonitor.processes.filter { app.pids.contains($0.pid) },
-                            trafficMonitor: trafficMonitor
+                            trafficMonitor: trafficMonitor,
+                            packetCapture: packetCapture,
+                            localProxy: localProxy
                         )
                         if app.id != visibleApplications.last?.id {
                             Divider()
@@ -292,7 +460,8 @@ struct NetworkMonitorView: View {
                     }
                 }
             }
-            .frame(height: min(max(CGFloat(visibleApplications.count) * 76, 180), 500))
+            .frame(height: min(max(CGFloat(visibleApplications.count) * 76, 180),
+                               localProxy.isBusy || packetCapture.isBusy ? 260 : 500))
         }
     }
 
@@ -317,7 +486,12 @@ struct NetworkMonitorView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(visibleHistoricalApplications) { app in
-                        HistoricalApplicationTrafficRow(application: app)
+                        HistoricalApplicationTrafficRow(
+                            application: app,
+                            liveApplication: trafficMonitor.applications.first { $0.id == app.id },
+                            packetCapture: packetCapture,
+                            localProxy: localProxy
+                        )
                         if app.id != visibleHistoricalApplications.last?.id {
                             Divider()
                                 .padding(.leading, 56)
@@ -332,6 +506,9 @@ struct NetworkMonitorView: View {
 
 private struct HistoricalApplicationTrafficRow: View {
     let application: HistoricalApplicationTraffic
+    let liveApplication: ApplicationTraffic?
+    var packetCapture: PacketCaptureManager
+    var localProxy: LocalProxyManager
     @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
 
     private var icon: NSImage {
@@ -377,21 +554,47 @@ private struct HistoricalApplicationTrafficRow: View {
             }
 
             Menu {
+                if let liveApplication {
+                    Button("抓取当前应用数据包（无需代理）") {
+                        beginPacketCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                    }
+                    .disabled(packetCapture.isBusy)
+                    Button("分析系统代理 HTTPS（不限应用）") {
+                        beginProxyCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                    }
+                    .disabled(localProxy.isBusy)
+                } else {
+                    Button("抓包需应用正在运行，请切换实时列表") {}
+                        .disabled(true)
+                }
+                Divider()
                 Button("隐藏此应用") {
                     ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .fixedSize()
+            .help("更多操作 · 抓包、隐藏应用")
+            .accessibilityLabel("更多操作：\(application.name)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .contextMenu {
+            if let liveApplication {
+                Button("抓取当前应用数据包（无需代理）") {
+                    beginPacketCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                }
+                .disabled(packetCapture.isBusy)
+                Button("分析系统代理 HTTPS（不限应用）") {
+                    beginProxyCapture(liveApplication, localProxy: localProxy, packetCapture: packetCapture)
+                }
+                .disabled(localProxy.isBusy)
+            }
             Button("隐藏此应用") {
                 ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
             }
@@ -403,6 +606,8 @@ private struct ApplicationTrafficRow: View {
     let application: ApplicationTraffic
     let processes: [ProcessTraffic]
     var trafficMonitor: NetworkTrafficMonitor
+    var packetCapture: PacketCaptureManager
+    var localProxy: LocalProxyManager
     @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
     @State private var isExpanded = false
     @State private var openFiles: [OpenProjectFile] = []
@@ -453,6 +658,7 @@ private struct ApplicationTrafficRow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
+                HStack(spacing: 10) {
                 Image(nsImage: icon)
                     .resizable()
                     .scaledToFit()
@@ -509,33 +715,43 @@ private struct ApplicationTrafficRow: View {
                         .foregroundStyle(.tertiary)
                         .frame(width: 12)
                 }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard canExpand else { return }
+                    let willExpand = !isExpanded
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        isExpanded.toggle()
+                    }
+                    if willExpand { inspectOpenFiles() }
+                }
 
                 Menu {
+                    Button("抓取当前应用数据包（无需代理）") {
+                        beginPacketCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+                    }
+                    .disabled(packetCapture.isBusy)
+                    Button("分析系统代理 HTTPS（不限应用）") {
+                        beginProxyCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+                    }
+                    .disabled(localProxy.isBusy)
+                    Divider()
                     Button("隐藏此应用") {
                         ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .fixedSize()
+                .help("更多操作 · 抓包、隐藏应用")
+                .accessibilityLabel("更多操作：\(application.name)")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard canExpand else { return }
-                let willExpand = !isExpanded
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    isExpanded.toggle()
-                }
-                if willExpand {
-                    inspectOpenFiles()
-                }
-            }
 
             if isExpanded {
                 ApplicationTrafficDetails(
@@ -548,6 +764,15 @@ private struct ApplicationTrafficRow: View {
             }
         }
         .contextMenu {
+            Button("抓取当前应用数据包（无需代理）") {
+                beginPacketCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+            }
+            .disabled(packetCapture.isBusy)
+            Button("分析系统代理 HTTPS（不限应用）") {
+                beginProxyCapture(application, localProxy: localProxy, packetCapture: packetCapture)
+            }
+            .disabled(localProxy.isBusy)
+            Divider()
             Button("隐藏此应用") {
                 ignoredApplicationsRaw = IgnoreRules.adding(application.id, to: ignoredApplicationsRaw)
             }

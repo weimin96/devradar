@@ -65,6 +65,8 @@ private struct ServiceGroup: Identifiable {
 struct ContentView: View {
     var scanner: AppPortScanner
     var trafficMonitor: NetworkTrafficMonitor
+    var packetCapture: PacketCaptureManager
+    var localProxy: LocalProxyManager
     @Binding var showAll: Bool
     @State private var searchText = ""
     @State private var panel = MonitorPanel.ports
@@ -174,7 +176,7 @@ struct ContentView: View {
             if panel == .ports {
                 portMonitorContent
             } else {
-                NetworkMonitorView(trafficMonitor: trafficMonitor)
+                NetworkMonitorView(trafficMonitor: trafficMonitor, packetCapture: packetCapture, localProxy: localProxy)
             }
 
             Divider()
@@ -194,7 +196,7 @@ struct ContentView: View {
                     .frame(height: 12)
 
                 Button {
-                    SettingsWindow.open(trafficMonitor: trafficMonitor)
+                    SettingsWindow.open(trafficMonitor: trafficMonitor, localProxy: localProxy)
                 } label: {
                     Image(systemName: "gearshape")
                     Text("设置")
@@ -203,7 +205,18 @@ struct ContentView: View {
                 .font(.caption)
                 Spacer()
                 Button("退出") {
-                    NSApplication.shared.terminate(nil)
+                    packetCapture.stop()
+                    localProxy.stopForQuit { restored in
+                        if restored {
+                            NSApplication.shared.terminate(nil)
+                        } else {
+                            CaptureInspectorWindow.open(
+                                mode: .proxy,
+                                localProxy: localProxy,
+                                packetCapture: packetCapture
+                            )
+                        }
+                    }
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
@@ -211,6 +224,21 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+            if localProxy.systemProxy.pendingRecovery {
+                HStack(spacing: 8) {
+                    Label("系统代理待恢复", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("恢复") {
+                        localProxy.systemProxy.restore { _ in }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(localProxy.systemProxy.isPending)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
         }
         .frame(width: 410)
         .onAppear {

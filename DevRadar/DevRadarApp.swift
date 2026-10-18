@@ -32,6 +32,8 @@ private enum LegacyPScanMigration {
 struct DevRadarApp: App {
     @State private var scanner: AppPortScanner
     @State private var trafficMonitor: NetworkTrafficMonitor
+    @State private var packetCapture = PacketCaptureManager()
+    @State private var localProxy = LocalProxyManager()
     @AppStorage("showAllPorts") private var showAll = false
     @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
     @AppStorage(IgnoreRules.portsKey) private var ignoredPortsRaw = "[]"
@@ -62,7 +64,13 @@ struct DevRadarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            ContentView(scanner: scanner, trafficMonitor: trafficMonitor, showAll: $showAll)
+            ContentView(
+                scanner: scanner,
+                trafficMonitor: trafficMonitor,
+                packetCapture: packetCapture,
+                localProxy: localProxy,
+                showAll: $showAll
+            )
         } label: {
             HStack(spacing: 1) {
                 Image(systemName: "network")

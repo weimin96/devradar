@@ -164,6 +164,7 @@ final class NetworkTrafficMonitor {
     private var resolvedDirectoryPIDs = Set<Int>()
     private var executablePathCache: [Int: String] = [:]
     private var resolvedExecutablePIDs = Set<Int>()
+    private var inputMethodProcesses: [Int: String] = [:]
     private var processOriginCache: [Int: ProcessOrigin] = [:]
     private var resolvedProcessOriginPIDs = Set<Int>()
     private var cumulativeByPID: [Int: (download: UInt64, upload: UInt64)] = [:]
@@ -301,6 +302,26 @@ final class NetworkTrafficMonitor {
         }
 
         frameNumber += 1
+        // Input methods are long-lived background agents. Some connect
+        // directly to remote IPs and remain idle between short upload bursts.
+        // Keep their existing PIDs visible instead of hiding them whenever
+        // nettop temporarily reports 0 bytes and a socket disappears.
+        // Discover by installation location, not by product or vendor name.
+        if frameNumber == 1 || frameNumber % 6 == 0 {
+            let previousPIDs = Set(inputMethodProcesses.keys)
+            inputMethodProcesses = Self.runningInputMethodProcesses()
+            for pid in previousPIDs.subtracting(inputMethodProcesses.keys) {
+                lastActiveAtByPID.removeValue(forKey: pid)
+            }
+        }
+        for (pid, path) in inputMethodProcesses {
+            lastActiveAtByPID[pid] = now
+            executablePathCache[pid] = path
+            resolvedExecutablePIDs.insert(pid)
+            if processNamesByPID[pid] == nil {
+                processNamesByPID[pid] = URL(fileURLWithPath: path).lastPathComponent
+            }
+        }
         if inspectConnections, (frameNumber == 1 || frameNumber % 3 == 0) {
             let connectionSnapshot = Self.connectionSnapshotsForAllProcesses()
             connectionsByPID = connectionSnapshot.snapshots
@@ -633,6 +654,35 @@ final class NetworkTrafficMonitor {
                 }
             }
             return result
+        } catch {
+            return [:]
+        }
+    }
+
+    private static func runningInputMethodProcesses() -> [Int: String] {
+        let task = Process()
+        let pipe = Pipe()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-axo", "pid=,comm="]
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            guard task.terminationStatus == 0 else { return [:] }
+            var found: [Int: String] = [:]
+            for line in String(decoding: data, as: UTF8.self).components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard let split = trimmed.firstIndex(where: { $0.isWhitespace }),
+                      let pid = Int(trimmed[..<split]) else { continue }
+                let path = trimmed[split...].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard path.hasPrefix("/Library/Input Methods/") ||
+                      path.hasPrefix(NSHomeDirectory() + "/Library/Input Methods/"),
+                      path.contains(".app/Contents/") else { continue }
+                found[pid] = path
+            }
+            return found
         } catch {
             return [:]
         }

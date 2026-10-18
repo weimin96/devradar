@@ -2,7 +2,7 @@ import ServiceManagement
 import SwiftUI
 
 struct SettingsWindow {
-    static func open(trafficMonitor: NetworkTrafficMonitor) {
+    static func open(trafficMonitor: NetworkTrafficMonitor, localProxy: LocalProxyManager) {
         let windowRef = NSApp.windows.first { $0.title == "DevRadar 设置" }
         if let window = windowRef {
             window.makeKeyAndOrderFront(nil)
@@ -10,7 +10,7 @@ struct SettingsWindow {
             return
         }
 
-        let settingsView = SettingsView(trafficMonitor: trafficMonitor)
+        let settingsView = SettingsView(trafficMonitor: trafficMonitor, localProxy: localProxy)
         let hostingView = NSHostingView(rootView: settingsView)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 340, height: 500),
@@ -29,6 +29,7 @@ struct SettingsWindow {
 
 struct SettingsView: View {
     var trafficMonitor: NetworkTrafficMonitor
+    var localProxy: LocalProxyManager
     @AppStorage("showAllPorts") private var showAll = false
     @AppStorage("showKillButton") private var showKill = true
     @AppStorage("showBrowserButton") private var showBrowser = true
@@ -36,6 +37,8 @@ struct SettingsView: View {
     @AppStorage("showTerminalButton") private var showTerminal = true
     @AppStorage("networkAlertEnabled") private var networkAlertEnabled = true
     @AppStorage("networkAlertThresholdMBps") private var networkAlertThresholdMBps = 5.0
+    @AppStorage("proxyDecryptHTTPS") private var proxyDecryptHTTPS = false
+    @AppStorage("proxyBodyPreview") private var proxyBodyPreview = false
     @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
     @AppStorage(IgnoreRules.portsKey) private var ignoredPortsRaw = "[]"
     @AppStorage(IgnoreRules.networkApplicationsKey) private var ignoredApplicationsRaw = "[]"
@@ -86,6 +89,38 @@ struct SettingsView: View {
                 }
                 Button("清空网络记录", role: .destructive) {
                     showClearTrafficConfirmation = true
+                }
+            }
+
+            Section("抓包") {
+                Text("按 PID 抓包始终包含 TCP/UDP 443 等加密连接。只会在你手动抓包时请求管理员授权，不会解密 HTTPS 请求正文。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("原始数据包的 HTTPS 正文仍然加密；要解密请使用下方本地代理。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("本地代理 · 个人使用") {
+                Toggle("代理 HTTPS 解密", isOn: $proxyDecryptHTTPS)
+                Toggle("记录脱敏正文预览", isOn: $proxyBodyPreview)
+                Text("仅对主动配置为使用 DevRadar 代理的应用生效。需要安装并手动信任本机 CA；开启选项不会自动修改系统代理。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Button("生成 / 定位 CA 证书（.cer）") { localProxy.prepareCA() }
+                Button("打开钥匙串访问") { localProxy.openKeychainAccess() }
+                Text("先在钥匙串访问中选中「登录（login）」，再拖入 .cer 文件。不要选「本地项目」或「iCloud」。导入后双击证书，在「信任」中按需设置 SSL 信任。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Button("复制终端导入命令（备用）") { localProxy.copyImportCommand() }
+                Button("复制仅 SSL 信任命令（备用）") { localProxy.copyTrustCommand() }
+                Text("上述操作必须由你亲自授权。只导入公共证书，不导入 .key 私钥；排查完成后建议撤销信任。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if let error = localProxy.lastError {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(Color(nsColor: .systemRed))
                 }
             }
 
