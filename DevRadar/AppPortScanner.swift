@@ -107,10 +107,17 @@ final class AppPortScanner {
         }
 
         guard !candidates.isEmpty else { return }
+        let identities = Dictionary(uniqueKeysWithValues: candidates.compactMap { port in
+            webProbeIdentities[port.port].map { (port.port, $0) }
+        })
         Self.probeWebServices(candidates) { [weak self] responsivePorts in
             guard let self else { return }
             let stillCurrent = Set(self.ports.map(\.port))
-            self.webServicePorts.formUnion(responsivePorts.intersection(stillCurrent))
+            let probedPorts = Set(identities.compactMap { port, identity in
+                stillCurrent.contains(port) && self.webProbeIdentities[port] == identity ? port : nil
+            })
+            self.webServicePorts.subtract(probedPorts)
+            self.webServicePorts.formUnion(responsivePorts.intersection(probedPorts))
         }
     }
 
@@ -138,6 +145,7 @@ final class AppPortScanner {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 1
         configuration.timeoutIntervalForResource = 1
+        configuration.connectionProxyDictionary = [:]
         let session = URLSession(configuration: configuration)
         let group = DispatchGroup()
         let lock = NSLock()

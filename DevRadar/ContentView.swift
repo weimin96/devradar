@@ -31,6 +31,7 @@ private enum GroupSortMode: String {
 }
 
 private enum MonitorPanel {
+    case projects
     case ports
     case network
 }
@@ -63,6 +64,7 @@ private struct ServiceGroup: Identifiable {
 }
 
 struct ContentView: View {
+    var projects: ProjectManager
     var scanner: AppPortScanner
     var trafficMonitor: NetworkTrafficMonitor
     var packetCapture: PacketCaptureManager
@@ -80,6 +82,7 @@ struct ContentView: View {
         let notIgnored = scanner.ports.filter { port in
             !ignoredPorts.contains(port.port)
                 && !ignoredProjects.contains(port.projectDirectory ?? "")
+                && !ignoredProjects.contains(port.projectRootDirectory ?? "")
         }
         if showAll {
             return notIgnored
@@ -112,7 +115,7 @@ struct ContentView: View {
 
     private var groups: [ServiceGroup] {
         let grouped = Dictionary(grouping: filteredPorts) { port in
-            if let projectDirectory = port.projectDirectory {
+            if let projectDirectory = port.projectRootDirectory {
                 return projectDirectory
             }
             if let composeProject = port.composeProject {
@@ -130,7 +133,7 @@ struct ContentView: View {
             return ServiceGroup(
                 id: key,
                 name: first.projectName ?? first.processName,
-                directory: first.projectDirectory ?? first.directory,
+                directory: first.projectRootDirectory ?? first.directory,
                 ports: sortedPorts
             )
         }
@@ -173,7 +176,9 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if panel == .ports {
+            if panel == .projects {
+                ProjectPanel(manager: projects, scanner: scanner)
+            } else if panel == .ports {
                 portMonitorContent
             } else {
                 NetworkMonitorView(trafficMonitor: trafficMonitor, packetCapture: packetCapture, localProxy: localProxy)
@@ -182,15 +187,15 @@ struct ContentView: View {
             Divider()
 
             HStack {
-                Button {
-                    panel = panel == .ports ? .network : .ports
-                    searchText = ""
-                } label: {
-                    Image(systemName: panel == .ports ? "arrow.up.arrow.down" : "network")
-                    Text(panel == .ports ? "网络监控" : "端口监控")
+                ForEach([(MonitorPanel.projects, "项目"), (.ports, "端口"), (.network, "网络")], id: \.1) { destination, title in
+                    Button(title) {
+                        panel = destination
+                        searchText = ""
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12, weight: panel == destination ? .semibold : .regular))
+                    .foregroundStyle(panel == destination ? Color.accentColor : .secondary)
                 }
-                .buttonStyle(.borderless)
-                .font(.caption)
 
                 Divider()
                     .frame(height: 12)
@@ -386,7 +391,7 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(groups) { group in
-                        ServiceGroupView(group: group, scanner: scanner)
+                        ServiceGroupView(group: group, scanner: scanner, projects: projects)
                         if group.id != groups.last?.id {
                             Divider()
                                 .padding(.leading, 12)
@@ -402,6 +407,7 @@ struct ContentView: View {
 private struct ServiceGroupView: View {
     let group: ServiceGroup
     var scanner: AppPortScanner
+    var projects: ProjectManager
     @AppStorage("showBrowserButton") private var showBrowser = true
     @AppStorage("showFinderButton") private var showFinder = true
     @AppStorage("showTerminalButton") private var showTerminal = true
@@ -413,7 +419,7 @@ private struct ServiceGroupView: View {
     }
 
     private var projectRuleDirectory: String? {
-        group.ports.compactMap(\.projectDirectory).first
+        group.ports.compactMap(\.projectRootDirectory).first
     }
 
     var body: some View {
@@ -435,6 +441,18 @@ private struct ServiceGroupView: View {
 
                 Spacer(minLength: 8)
 
+                if let directory = projectRuleDirectory {
+                    Button {
+                        ProjectWindows.collect(name: group.name, directory: directory,
+                                               ports: scanner.ports.filter { $0.projectRootDirectory == directory }, manager: projects)
+                    } label: {
+                        Image(systemName: "bookmark")
+                            .foregroundStyle(Color.accentColor.opacity(0.78))
+                    }
+                    .help("收藏到项目")
+                    .disabled(projects.loadFailed || projects.isQuitting)
+                }
+
                 if showBrowser, let port = scanner.preferredWebPort(for: group.ports) {
                     Button {
                         openBrowser(port: port)
@@ -443,7 +461,7 @@ private struct ServiceGroupView: View {
                             .foregroundStyle(Color.accentColor.opacity(0.78))
                     }
                     .help(scanner.isWebService(port: port)
-                        ? "打开已识别的 Web 服务 localhost:\(port)"
+                        ? "打开已识别的 HTTP 服务 localhost:\(port)"
                         : "在浏览器中打开 localhost:\(port)")
                 }
 
@@ -584,7 +602,7 @@ private struct ServiceRow: View {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
-                Text(":\(port.port)")
+                Text(verbatim: ":\(port.port)")
                     .font(.system(.caption, design: .monospaced, weight: .semibold))
                     .foregroundStyle(Color.accentColor.opacity(0.82))
                     .padding(.horizontal, 6)
@@ -593,51 +611,58 @@ private struct ServiceRow: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
             .buttonStyle(.plain)
+            .frame(width: 62, alignment: .leading)
             .help("打开 http://localhost:\(port.port)")
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Label(port.runtimeName, systemImage: RuntimeVisual.icon(for: port))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .help(port.processName)
                     if let serviceName = port.serviceName,
                        serviceName.caseInsensitiveCompare(port.projectName ?? "") != .orderedSame {
                         Text(serviceName)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.primary)
-                    }
-                    if port.processName.caseInsensitiveCompare(port.runtimeName) != .orderedSame {
-                        Text(port.processName)
+                            .help(serviceName)
+                    } else if let directory = port.projectDirectory, directory != port.projectRootDirectory {
+                        Text(URL(fileURLWithPath: directory).lastPathComponent)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .help(directory)
                     }
+                    Spacer(minLength: 0)
                     if scanner.isWebService(port: port.port) {
-                        Label("Web", systemImage: "globe")
-                            .font(.caption2)
-                            .foregroundStyle(Color.accentColor.opacity(0.72))
-                    }
-                    if port.pid > 0 {
-                        Text("PID \(port.pid)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    } else if let containerName = port.containerName {
-                        Text(containerName)
+                        Text("HTTP")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.accentColor.opacity(0.72))
+                            .fixedSize()
                     }
                 }
+                .lineLimit(1)
+                .truncationMode(.tail)
 
-                if let command = port.command {
-                    Text(command)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(commandHelp(command))
+                HStack(spacing: 8) {
+                    if port.pid > 0 {
+                        Text(verbatim: "PID \(port.pid)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
+                    if let command = port.command {
+                        Text(command)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(commandHelp(command))
+                    }
                 }
             }
-
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help([port.containerName, port.command].compactMap { $0 }.joined(separator: "\n"))
 
             if showKill {
                 Button {
@@ -650,6 +675,7 @@ private struct ServiceRow: View {
                         .background(Color(nsColor: .systemRed).opacity(isHovered ? 0.10 : 0))
                         .clipShape(Circle())
                 }
+                .fixedSize()
                 .help(port.containerID == nil ? "停止进程" : "停止容器")
             }
 

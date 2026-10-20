@@ -30,6 +30,8 @@ private enum LegacyPScanMigration {
 
 @main
 struct DevRadarApp: App {
+    @NSApplicationDelegateAdaptor(ProjectAppDelegate.self) private var projectLifecycle
+    @State private var projects = ProjectManager.shared
     @State private var scanner: AppPortScanner
     @State private var trafficMonitor: NetworkTrafficMonitor
     @State private var packetCapture = PacketCaptureManager()
@@ -57,6 +59,7 @@ struct DevRadarApp: App {
                     port.isDevelopmentService
                         && !ignoredPorts.contains(port.port)
                         && !ignoredProjects.contains(port.projectDirectory ?? "")
+                        && !ignoredProjects.contains(port.projectRootDirectory ?? "")
                 }
                 .map { $0.containerID ?? "pid:\($0.pid)" }
         ).count
@@ -65,6 +68,7 @@ struct DevRadarApp: App {
     var body: some Scene {
         MenuBarExtra {
             ContentView(
+                projects: projects,
                 scanner: scanner,
                 trafficMonitor: trafficMonitor,
                 packetCapture: packetCapture,

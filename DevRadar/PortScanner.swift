@@ -10,6 +10,7 @@ public struct PortInfo: Identifiable, Hashable, Sendable {
     public let command: String?
     public let executable: String?
     public let projectDirectory: String?
+    public let projectRootDirectory: String?
     public let projectName: String?
     public let serviceName: String?
     public let containerID: String?
@@ -212,6 +213,7 @@ public final class PortScanner: @unchecked Sendable {
             var results = regularRawPorts.map { raw in
                 let directory = directories[raw.pid]
                 let projectDirectory = Self.projectDirectory(from: directory)
+                let projectRootDirectory = Self.projectRootDirectory(from: projectDirectory)
                 let snapshot = snapshots[raw.pid]
                 let serviceName = Self.springBootServiceName(
                     command: snapshot?.command,
@@ -225,7 +227,8 @@ public final class PortScanner: @unchecked Sendable {
                     command: snapshot?.command,
                     executable: Self.executablePath(for: raw.pid),
                     projectDirectory: projectDirectory,
-                    projectName: Self.projectName(for: projectDirectory),
+                    projectRootDirectory: projectRootDirectory,
+                    projectName: Self.projectName(for: projectRootDirectory),
                     serviceName: serviceName,
                     containerID: nil,
                     containerName: nil,
@@ -246,6 +249,7 @@ public final class PortScanner: @unchecked Sendable {
                     command: docker.command,
                     executable: nil,
                     projectDirectory: docker.projectDirectory,
+                    projectRootDirectory: docker.projectDirectory,
                     projectName: docker.composeProject ?? docker.containerName,
                     serviceName: docker.composeService ?? docker.containerName,
                     containerID: docker.containerID,
@@ -341,6 +345,8 @@ public final class PortScanner: @unchecked Sendable {
 
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
         task.arguments = ["-a", "-p", pids.map(String.init).joined(separator: ","), "-d", "cwd", "-Fpn"]
+        // lsof escapes non-ASCII path bytes under the C locale inherited by GUI apps.
+        task.environment = ProcessInfo.processInfo.environment.merging(["LC_ALL": "en_US.UTF-8"]) { _, value in value }
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
 
@@ -386,6 +392,18 @@ public final class PortScanner: @unchecked Sendable {
         }
 
         return gitCandidate?.path ?? directory
+    }
+
+    public static func projectRootDirectory(from directory: String?) -> String? {
+        guard let directory else { return nil }
+        var url = URL(fileURLWithPath: directory).standardizedFileURL
+        while url.path != "/" {
+            if FileManager.default.fileExists(atPath: url.appendingPathComponent(".git").path) {
+                return url.path
+            }
+            url.deleteLastPathComponent()
+        }
+        return directory
     }
 
     private static let projectMarkers = [
