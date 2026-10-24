@@ -32,12 +32,15 @@ final class AutomaticHTTPSEvidenceManager {
     @ObservationIgnored private var recentTriggers: [String: Date] = [:]
     @ObservationIgnored private var highSampleCount: [String: Int] = [:]
 
-    private static var directory: URL {
+    private static var defaultDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/DevRadar/AutomaticHTTPS", isDirectory: true)
     }
 
-    init() {
+    private let directory: URL
+
+    init(directory: URL = AutomaticHTTPSEvidenceManager.defaultDirectory) {
+        self.directory = directory
         restoreFromDisk()
     }
 
@@ -66,22 +69,38 @@ final class AutomaticHTTPSEvidenceManager {
 
     func stopAll() {
         for key in Array(sessions.keys) { finish(key: key, status: "stopped") }
-    }
-
-    func clearSavedRecords() {
-        stopAll()
-        for record in records {
-            try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(record.id.uuidString + ".json"))
-        }
-        records.removeAll()
-        recentTriggers.removeAll()
         highSampleCount.removeAll()
-        lastError = nil
     }
 
-    func deleteRecord(_ record: AutomaticHTTPSRecord) {
-        try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(record.id.uuidString + ".json"))
-        records.removeAll { $0.id == record.id }
+    @discardableResult
+    func clearSavedRecords() -> Bool {
+        stopAll()
+        do {
+            do { try FileManager.default.removeItem(at: directory) }
+            catch let error as CocoaError where error.code == .fileNoSuchFile {}
+            records.removeAll()
+            recentTriggers.removeAll()
+            highSampleCount.removeAll()
+            lastError = nil
+            return true
+        } catch {
+            lastError = "自动连接证据清空失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @discardableResult
+    func deleteRecord(_ record: AutomaticHTTPSRecord) -> Bool {
+        do {
+            do { try FileManager.default.removeItem(at: directory.appendingPathComponent(record.id.uuidString + ".json")) }
+            catch let error as CocoaError where error.code == .fileNoSuchFile {}
+            records.removeAll { $0.id == record.id }
+            lastError = nil
+            return true
+        } catch {
+            lastError = "自动连接证据删除失败：\(error.localizedDescription)"
+            return false
+        }
     }
 
     private func begin(application: ApplicationTraffic, triggeredAt: Date) {
@@ -154,15 +173,16 @@ final class AutomaticHTTPSEvidenceManager {
     private func persist(_ record: AutomaticHTTPSRecord) {
         do {
             try FileManager.default.createDirectory(
-                at: Self.directory, withIntermediateDirectories: true,
+                at: directory, withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
-            let url = Self.directory.appendingPathComponent(record.id.uuidString + ".json")
+            let url = directory.appendingPathComponent(record.id.uuidString + ".json")
             try encoder.encode(record).write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            lastError = nil
             pruneStorage()
         } catch {
             lastError = "自动连接证据保存失败：\(error.localizedDescription)"
@@ -170,29 +190,42 @@ final class AutomaticHTTPSEvidenceManager {
     }
 
     private func restoreFromDisk() {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: Self.directory, includingPropertiesForKeys: nil
-        ) else { return }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        records = files.filter { $0.pathExtension == "json" }.compactMap { url in
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? decoder.decode(AutomaticHTTPSRecord.self, from: data)
-        }.filter { Date().timeIntervalSince($0.triggeredAt) < AutomaticHTTPSPolicy.retention }
-            .sorted { $0.triggeredAt > $1.triggeredAt }
-        if records.count > AutomaticHTTPSPolicy.maxSavedRecords {
-            records = Array(records.prefix(AutomaticHTTPSPolicy.maxSavedRecords))
+        do {
+            let files: [URL]
+            do { files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
+            catch let error as CocoaError where error.code == .fileReadNoSuchFile { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var restored: [AutomaticHTTPSRecord] = []
+            for file in files where file.pathExtension == "json" {
+                do { restored.append(try decoder.decode(AutomaticHTTPSRecord.self, from: Data(contentsOf: file))) }
+                catch { lastError = "自动连接证据读取失败（\(file.lastPathComponent)）：\(error.localizedDescription)" }
+            }
+            records = Array(restored.filter { Date().timeIntervalSince($0.triggeredAt) < AutomaticHTTPSPolicy.retention }
+                .sorted { $0.triggeredAt > $1.triggeredAt }.prefix(AutomaticHTTPSPolicy.maxSavedRecords))
+            pruneStorage()
+        } catch {
+            lastError = "自动连接证据读取失败：\(error.localizedDescription)"
         }
-        pruneStorage()
     }
 
     private func pruneStorage() {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: Self.directory, includingPropertiesForKeys: nil
-        ) else { return }
-        let retained = Set(records.map { $0.id.uuidString + ".json" })
-        for file in files where file.pathExtension == "json" && !retained.contains(file.lastPathComponent) {
-            try? FileManager.default.removeItem(at: file)
+        do {
+            let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            let retained = Set(records.map { $0.id.uuidString + ".json" })
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            for file in files where file.pathExtension == "json" && !retained.contains(file.lastPathComponent) {
+                do {
+                    _ = try decoder.decode(AutomaticHTTPSRecord.self, from: Data(contentsOf: file))
+                } catch {
+                    lastError = "自动连接证据读取失败，已保留原文件：\(file.lastPathComponent)"
+                    continue
+                }
+                try FileManager.default.removeItem(at: file)
+            }
+        } catch {
+            lastError = "自动连接证据清理失败：\(error.localizedDescription)"
         }
     }
 }

@@ -67,8 +67,11 @@ struct HTTPSConnectionTracker {
         guard let arrow = socket.range(of: "<->") else { return false }
         let local = String(socket[..<arrow.lowerBound])
         let remote = String(socket[arrow.upperBound...])
-        guard let colon = remote.lastIndex(of: ":"),
-              let port = Int(remote[remote.index(after: colon)...]),
+        let dot = remote.lastIndex(of: ".").flatMap { index in
+            Int(remote[remote.index(after: index)...]) != nil ? index : nil
+        }
+        guard let separator = dot ?? remote.lastIndex(of: ":"),
+              let port = Int(remote[remote.index(after: separator)...]),
               port > 0 && port <= 65535 else { return false }
         let id = "\(pid)|\(transport)|\(local)|\(remote)"
         if var previous = connections[id] {

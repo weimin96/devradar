@@ -85,7 +85,7 @@ final class DNSCaptureManager {
                 let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let diagnostics = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     guard let self, self.generation == session else { return }
                     let parts = output.split(separator: ":", maxSplits: 2)
                     guard task.terminationStatus == 0, parts.count == 3,
@@ -108,10 +108,11 @@ final class DNSCaptureManager {
                     self.timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                         self?.refresh()
                     }
+                    if let timer = self.timer { RunLoop.main.add(timer, forMode: .modalPanel) }
                     self.refresh()
                 }
             } catch {
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     guard let self, self.generation == session else { return }
                     self.state = .failed
                     self.error = error.localizedDescription
@@ -134,14 +135,18 @@ final class DNSCaptureManager {
         var executable = [CChar](repeating: 0, count: 4096)
         let count = proc_pidpath(pid, &executable, UInt32(executable.count))
         guard count > 0, String(cString: executable) == "/usr/sbin/tcpdump" else {
-            refresh()
+            self.pid = nil
+            timer?.invalidate()
+            timer = nil
+            state = .completed
+            error = "DNS 监听进程已退出或身份已变化，未发送停止信号"
+            readNewLines()
             return
         }
         if kill(pid, SIGINT) == 0 {
             state = .stopping
         } else {
             error = "无法停止 DNS 监听进程"
-            refresh()
         }
     }
 
@@ -180,7 +185,7 @@ final class DNSCaptureManager {
                 try handle.seek(toOffset: currentOffset)
                 return try handle.read(upToCount: 128 * 1024) ?? Data()
             }
-            DispatchQueue.main.async {
+            ApplicationRunLoop.perform { [weak self] in
                 guard let self, self.generation == session else { return }
                 self.readPending = false
                 switch result {

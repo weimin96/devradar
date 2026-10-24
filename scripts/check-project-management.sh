@@ -6,6 +6,7 @@ checks_directory=$(mktemp -d "${TMPDIR:-/tmp}/devradar-project-checks.XXXXXX")
 trap 'rm -rf "$checks_directory"' EXIT HUP INT TERM
 
 swiftc -parse-as-library \
+    "$project_root/DevRadar/ApplicationRunLoop.swift" \
     "$project_root/DevRadar/ProjectModels.swift" \
     "$project_root/DevRadar/ProjectCommand.swift" \
     "$project_root/DevRadar/ProjectGit.swift" \

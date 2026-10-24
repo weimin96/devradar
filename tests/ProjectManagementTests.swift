@@ -18,10 +18,31 @@ struct ProjectManagementTests {
     }
 
     @MainActor
+    static func modalCleanupCompletion() throws {
+        let completion = ProjectLog()
+        DispatchQueue.global().async {
+            ApplicationRunLoop.perform {
+                completion.append(Data("回调".utf8))
+                let timer = Timer(timeInterval: 0.01, repeats: false) { _ in
+                    completion.append(Data("完成".utf8))
+                }
+                RunLoop.main.add(timer, forMode: .modalPanel)
+            }
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while completion.text != "回调完成", Date() < deadline {
+            _ = RunLoop.main.run(mode: .modalPanel, before: Date().addingTimeInterval(0.02))
+        }
+        try expect(completion.text == "回调完成", "AppKit 退出模态循环中须能执行清理回调和定时器")
+        print("PASS: asynchronous cleanup completes in the native modal run loop")
+    }
+
+    @MainActor
     static func main() async throws {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("DevRadar 项目验证 \(UUID())")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workspace) }
+        try modalCleanupCompletion()
         try configuration(in: workspace)
         try synchronization(in: workspace)
         try execution(in: workspace)

@@ -7,6 +7,8 @@ trap 'rm -rf "$checks_directory"' EXIT HUP INT TERM
 
 swiftc -parse-as-library \
     "$project_root/DevRadar/PortScanner.swift" \
+    "$project_root/DevRadar/ProjectModels.swift" \
+    "$project_root/DevRadar/ProjectCommand.swift" \
     "$project_root/tests/PortScannerTests.swift" \
     -o "$checks_directory/port-checks"
 "$checks_directory/port-checks"

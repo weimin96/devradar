@@ -90,6 +90,8 @@ enum DNSDiagnosticsWindow {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    static var isCapturing: Bool { model.capture.running }
+
     static func stopCapture() {
         model.capture.stop()
     }

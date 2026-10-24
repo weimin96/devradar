@@ -111,11 +111,11 @@ final class ProjectManager {
                 do {
                     let result = try ProjectCommand.run(executable: "/bin/zsh", arguments: ["-lc", task.command],
                         directory: directory, timeout: nil, cancellation: cancellation,
-                        onStarted: { DispatchQueue.main.async { if !cancellation.isCancelled { run.state = "运行中" } } },
+                        onStarted: { ApplicationRunLoop.perform { if !cancellation.isCancelled { run.state = "运行中" } } },
                         onOutput: log.append)
                     outcome = result.cancelled ? "已停止" : result.exitCode == 0 ? "已结束" : "失败，退出码 \(result.exitCode)"
                 } catch { outcome = cancellation.isCancelled ? "已停止" : "失败：\(error.localizedDescription)" }
-                DispatchQueue.main.async { run.state = outcome; run.active = false }
+                ApplicationRunLoop.perform { run.state = outcome; run.active = false }
             }
         } catch { self.error = error.localizedDescription }
     }
@@ -153,7 +153,7 @@ final class ProjectManager {
         gitCancellation = cancellation
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result { try work(cancellation) }
-            DispatchQueue.main.async {
+            ApplicationRunLoop.perform {
                 self.gitProjectID = nil; self.gitCancellation = nil
                 switch result {
                 case .success(.state(let state)): self.gitStates[project.id] = state
@@ -199,22 +199,40 @@ final class ProjectManager {
 @MainActor
 final class ProjectAppDelegate: NSObject, NSApplicationDelegate {
     private var quitTimer: Timer?
+    private var preparingQuit = false
+    var prepareNetworkQuit: ((@escaping (Bool) -> Void) -> Void)?
+    var networkQuitReady: () -> Bool = { true }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !preparingQuit, let prepareNetworkQuit else { return .terminateCancel }
         let manager = ProjectManager.shared
-        guard manager.hasActiveWork else { return .terminateNow }
-        let alert = NSAlert()
-        alert.messageText = "停止项目任务并退出？"
-        alert.informativeText = "正在运行的项目任务和 Git 操作将被停止。"
-        alert.addButton(withTitle: "停止并退出")
-        alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
-        manager.stopForQuit()
-        quitTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-            MainActor.assumeIsolated {
-                guard !manager.hasActiveWork else { return }
-                timer.invalidate(); self?.quitTimer = nil
-                sender.reply(toApplicationShouldTerminate: true)
+        if manager.hasActiveWork {
+            let alert = NSAlert()
+            alert.messageText = "停止项目任务并退出？"
+            alert.informativeText = "正在运行的项目任务和 Git 操作将被停止。"
+            alert.addButton(withTitle: "停止并退出")
+            alert.addButton(withTitle: "取消")
+            guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+        }
+        preparingQuit = true
+        prepareNetworkQuit { [weak self] succeeded in
+            // Even a synchronous cleanup must reply after terminateLater is returned.
+            ApplicationRunLoop.perform { [weak self] in
+                guard let self else { return }
+                guard succeeded else {
+                    self.preparingQuit = false
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                manager.stopForQuit()
+                self.quitTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+                    MainActor.assumeIsolated {
+                        guard let self, !manager.hasActiveWork, self.networkQuitReady() else { return }
+                        timer.invalidate(); self.quitTimer = nil
+                        sender.reply(toApplicationShouldTerminate: true)
+                    }
+                }
+                if let timer = self.quitTimer { RunLoop.main.add(timer, forMode: .modalPanel) }
             }
         }
         return .terminateLater

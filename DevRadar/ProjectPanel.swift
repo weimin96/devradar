@@ -43,10 +43,10 @@ struct ProjectPanel: View {
         }
         .font(.system(size: 12))
         .padding(12)
-        .confirmationDialog("移除项目？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), titleVisibility: .visible) {
-            if let removal { Button("移除", role: .destructive) { manager.remove(removal); self.removal = nil } }
-            Button("取消", role: .cancel) { removal = nil }
-        } message: { Text("仅移除 DevRadar 中的配置，项目文件保持不变。") }
+        .confirmationDialog("移除项目？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), titleVisibility: .visible, presenting: removal) { project in
+            Button("移除", role: .destructive) { manager.remove(project); self.removal = nil }
+            Button("取消", role: .cancel) { self.removal = nil }
+        } message: { _ in Text("仅移除 DevRadar 中的配置，项目文件保持不变。") }
         .alert("操作失败", isPresented: Binding(get: { manager.error != nil && !manager.loadFailed }, set: { if !$0 { manager.error = nil } })) {
             Button("确定", role: .cancel) { manager.error = nil }
         } message: { Text(manager.error ?? "") }

@@ -209,23 +209,7 @@ struct ContentView: View {
                 .buttonStyle(.borderless)
                 .font(.caption)
                 Spacer()
-                Button("退出") {
-                    DNSDiagnosticsWindow.stopCapture()
-                    packetCapture.stop()
-                    trafficMonitor.automaticHTTPSEvidence.stopAll()
-                    localProxy.stopForQuit { restored in
-                        if restored {
-                            NSApplication.shared.terminate(nil)
-                        } else {
-                            CaptureInspectorWindow.open(
-                                mode: .proxy,
-                                localProxy: localProxy,
-                                packetCapture: packetCapture,
-                                trafficMonitor: trafficMonitor
-                            )
-                        }
-                    }
-                }
+                Button("退出") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.borderless)
                 .font(.caption)
             }

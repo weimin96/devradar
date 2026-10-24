@@ -47,26 +47,33 @@ final class SystemProxyController {
 
     /// Called before starting the local proxy process. All calls here are
     /// read-only; no network configuration is modified.
-    func inspectCurrentConnection() -> String? {
-        guard !pendingRecovery else { return nil }
-        do {
-            let backup = try Self.readCurrent(devRadarAddress: "")
-            serviceName = backup.service
-            let web = backup.http
-            let secure = backup.https
-            guard web.enabled, secure.enabled, !web.authenticated, !secure.authenticated,
-                  web.server == secure.server, web.port == secure.port,
-                  web.port > 0, !web.server.isEmpty else {
-                originalUpstream = nil
-                message = "当前系统 HTTP/HTTPS 代理不一致或有鉴权，无法安全自动接力。仍可抓取原始数据包。"
-                return nil
+    func inspectCurrentConnection(completion: @escaping (String?) -> Void) {
+        guard !pendingRecovery else { completion(nil); return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try Self.readCurrent(devRadarAddress: "") }
+            ApplicationRunLoop.perform { [weak self] in
+                guard let self else { completion(nil); return }
+                switch result {
+                case .success(let backup):
+                    self.serviceName = backup.service
+                    let web = backup.http
+                    let secure = backup.https
+                    guard web.enabled, secure.enabled, !web.authenticated, !secure.authenticated,
+                          web.server == secure.server, web.port == secure.port,
+                          web.port > 0, !web.server.isEmpty else {
+                        self.originalUpstream = nil
+                        self.message = "当前系统 HTTP/HTTPS 代理不一致或有鉴权，无法安全自动接力。仍可抓取原始数据包。"
+                        completion(nil)
+                        return
+                    }
+                    self.originalUpstream = "http://\(web.server):\(web.port)"
+                    completion(self.originalUpstream)
+                case .failure(let error):
+                    self.originalUpstream = nil
+                    self.message = "无法识别当前网络代理：\(error.localizedDescription)"
+                    completion(nil)
+                }
             }
-            originalUpstream = "http://\(web.server):\(web.port)"
-            return originalUpstream
-        } catch {
-            originalUpstream = nil
-            message = "无法识别当前网络代理：\(error.localizedDescription)"
-            return nil
         }
     }
 
@@ -96,7 +103,7 @@ final class SystemProxyController {
                 // Persist original settings before making any changes, so
                 // a failed partial update remains recoverable.
                 try Self.persist(backup)
-                DispatchQueue.main.async { self?.pendingRecovery = true }
+                ApplicationRunLoop.perform { [weak self] in self?.pendingRecovery = true }
                 let components = devRadarAddress.split(separator: ":")
                 guard components.count == 2, components[0] == "127.0.0.1",
                       let port = Int(components[1]), (1...65535).contains(port) else {
@@ -112,13 +119,13 @@ final class SystemProxyController {
                 guard applied.http == expectedProxy, applied.https == expectedProxy else {
                     throw ProxyError.invalid("系统代理未正确切换，请点击「恢复原系统代理」")
                 }
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     self?.state = .active
                     self?.message = "已临时切换 \(backup.service) 的系统 HTTP/HTTPS 代理；其他遵循系统代理的应用也可能经过此端口。结束后必须恢复。"
                     completion(true)
                 }
             } catch {
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     self?.state = .failed
                     self?.message = "切换失败：\(error.localizedDescription)。如已经修改了系统代理，请立即点击恢复。"
                     completion(false)
@@ -163,14 +170,14 @@ final class SystemProxyController {
                     throw ProxyError.invalid("系统代理恢复命令已执行，但验证未通过；恢复记录已保留")
                 }
                 try FileManager.default.removeItem(at: Self.backupURL)
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     self?.pendingRecovery = false
                     self?.state = .idle
                     self?.message = "已恢复 \(backup.service) 原有的 HTTP/HTTPS 代理设置"
                     completion(true)
                 }
             } catch {
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     self?.state = .failed
                     self?.message = "恢复失败：\(error.localizedDescription)。系统代理备份仍保留，请重试恢复。"
                     completion(false)
@@ -188,19 +195,9 @@ final class SystemProxyController {
     }
 
     private static func output(_ executable: String, _ args: [String]) throws -> String {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = args
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        let result = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw ProxyError.invalid(result.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        return result
+        let result = try ProjectCommand.run(executable: executable, arguments: args, directory: "/",
+            timeout: executable == "/usr/bin/osascript" ? 120 : 10).checked()
+        return String(decoding: result, as: UTF8.self)
     }
 
     private static func readCurrent(devRadarAddress: String) throws -> NetworkProxyBackup {

@@ -54,12 +54,22 @@ struct ProjectPortImportTests {
         let module = workspace.appendingPathComponent("backend")
         try FileManager.default.createDirectory(at: module, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workspace) }
+        let readyFile = workspace.appendingPathComponent("backend.ready")
+        func waitUntilReady(_ file: URL, process: Process) throws {
+            let deadline = Date().addingTimeInterval(5)
+            while !FileManager.default.fileExists(atPath: file.path), process.isRunning, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            try expect(FileManager.default.fileExists(atPath: file.path), "验证进程未能就绪")
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", "import time; time.sleep(30)"]
+        process.arguments = ["-c", "import os,pathlib,time; pathlib.Path(os.environ['DEVRADAR_READY']).touch(); time.sleep(30)"]
+        process.environment = ProcessInfo.processInfo.environment.merging(["DEVRADAR_READY": readyFile.path]) { _, value in value }
         process.currentDirectoryURL = module
         try process.run()
         defer { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+        try waitUntilReady(readyFile, process: process)
         var pathBytes = [CChar](repeating: 0, count: 4096)
         guard proc_pidpath(process.processIdentifier, &pathBytes, UInt32(pathBytes.count)) > 0 else {
             throw ProjectError.message("无法读取验证进程路径")
@@ -81,10 +91,13 @@ struct ProjectPortImportTests {
         try FileManager.default.createDirectory(at: frontend, withIntermediateDirectories: true)
         let frontendProcess = Process()
         frontendProcess.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        frontendProcess.arguments = ["-c", "import time; time.sleep(31)"]
+        let frontendReady = workspace.appendingPathComponent("frontend.ready")
+        frontendProcess.arguments = ["-c", "import os,pathlib,time; pathlib.Path(os.environ['DEVRADAR_READY']).touch(); time.sleep(31)"]
+        frontendProcess.environment = ProcessInfo.processInfo.environment.merging(["DEVRADAR_READY": frontendReady.path]) { _, value in value }
         frontendProcess.currentDirectoryURL = frontend
         try frontendProcess.run()
         defer { if frontendProcess.isRunning { frontendProcess.terminate(); frontendProcess.waitUntilExit() } }
+        try waitUntilReady(frontendReady, process: frontendProcess)
         let services = [port(8080), port(8081), port(5189, owner: frontendProcess, directory: frontend)]
         let multiple = try ProjectPortImport(name: "收藏验证", directory: workspace.path, ports: services, existing: [collected.project])
         try expect(multiple.project.tasks.count == 2 && multiple.project.tasks.first == collected.project.tasks.first,

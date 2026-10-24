@@ -95,6 +95,11 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.menu)
                 }
+                if let error = trafficMonitor.lastError {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(Color(nsColor: .systemRed))
+                }
                 Button("清空网络记录", role: .destructive) {
                     showClearTrafficConfirmation = true
                 }

@@ -292,7 +292,7 @@ func (p *proxy) forward(w http.ResponseWriter, request *http.Request, forcedSche
 		return
 	}
 	requestID, started := p.beginRequest(request.Method, target)
-	outgoing := request.Clone(context.Background())
+	outgoing := request.Clone(request.Context())
 	copyURL := *target
 	outgoing.URL = &copyURL
 	outgoing.RequestURI = ""
@@ -320,7 +320,7 @@ func (p *proxy) forward(w http.ResponseWriter, request *http.Request, forcedSche
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	downloaded, _ := io.Copy(w, resp.Body)
+	downloaded, transferErr := io.Copy(w, resp.Body)
 	bytesSent := int64(0)
 	previewText := ""
 	if body != nil {
@@ -331,10 +331,14 @@ func (p *proxy) forward(w http.ResponseWriter, request *http.Request, forcedSche
 	if len(path) > 384 {
 		path = path[:384]
 	}
+	kind, message := "request", ""
+	if transferErr != nil {
+		kind, message = "error", "响应传输失败："+truncate(transferErr.Error(), 140)
+	}
 	p.report.send(event{
 		RequestID: requestID, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		DurationMs: time.Since(started).Milliseconds(),
-		Type:       "request", Method: request.Method, Host: target.Host, Path: path,
+		Type:       kind, Method: request.Method, Host: target.Host, Path: path, Message: message,
 		Status: resp.StatusCode, UploadBytes: bytesSent, DownloadBytes: downloaded,
 		ContentType: truncate(request.Header.Get("Content-Type"), 100), Preview: previewText,
 	})

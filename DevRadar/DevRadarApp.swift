@@ -34,8 +34,8 @@ struct DevRadarApp: App {
     @State private var projects = ProjectManager.shared
     @State private var scanner: AppPortScanner
     @State private var trafficMonitor: NetworkTrafficMonitor
-    @State private var packetCapture = PacketCaptureManager()
-    @State private var localProxy = LocalProxyManager()
+    @State private var packetCapture: PacketCaptureManager
+    @State private var localProxy: LocalProxyManager
     @AppStorage("showAllPorts") private var showAll = false
     @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
     @AppStorage(IgnoreRules.portsKey) private var ignoredPortsRaw = "[]"
@@ -44,8 +44,37 @@ struct DevRadarApp: App {
         LegacyPScanMigration.runIfNeeded()
         let scanner = AppPortScanner()
         let trafficMonitor = NetworkTrafficMonitor()
+        let packetCapture = PacketCaptureManager()
+        let localProxy = LocalProxyManager()
+        _packetCapture = State(initialValue: packetCapture)
+        _localProxy = State(initialValue: localProxy)
         _scanner = State(initialValue: scanner)
         _trafficMonitor = State(initialValue: trafficMonitor)
+        projectLifecycle.networkQuitReady = { !packetCapture.isBusy && !DNSDiagnosticsWindow.isCapturing }
+        projectLifecycle.prepareNetworkQuit = { completion in
+            localProxy.stopForQuit { restored in
+                guard restored else {
+                    CaptureInspectorWindow.open(mode: .proxy, localProxy: localProxy,
+                        packetCapture: packetCapture, trafficMonitor: trafficMonitor)
+                    completion(false)
+                    return
+                }
+                DNSDiagnosticsWindow.stopCapture()
+                packetCapture.stop()
+                scanner.stopScanning()
+                trafficMonitor.stop { saved in
+                    if !saved {
+                        scanner.startScanning()
+                        trafficMonitor.start()
+                        let alert = NSAlert()
+                        alert.messageText = "网络记录保存失败"
+                        alert.informativeText = trafficMonitor.lastError ?? "无法保存网络记录，已取消退出"
+                        alert.runModal()
+                    }
+                    completion(saved)
+                }
+            }
+        }
         scanner.startScanning()
         trafficMonitor.start()
     }

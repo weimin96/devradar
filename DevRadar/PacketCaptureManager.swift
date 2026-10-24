@@ -34,6 +34,7 @@ final class PacketCaptureManager {
     private var packetTextOffset: UInt64 = 0
     private var packetAccumulator = PacketLineAccumulator()
     private var capturePID: pid_t?
+    private var stopRequested = false
     private var timer: Timer?
     private var beganAt: Date?
     private var lastReadAt = Date.distantPast
@@ -112,13 +113,13 @@ final class PacketCaptureManager {
         let reader = HTTPSConnectionReader(pids: pids)
         httpsReader = reader
         reader.onUpdate = { [weak self, weak reader] connections in
-            DispatchQueue.main.async {
+            ApplicationRunLoop.perform { [weak self, weak reader] in
                 guard let self, let reader, self.httpsReader === reader else { return }
                 self.httpsConnections = connections
             }
         }
         reader.onError = { [weak self, weak reader] message in
-            DispatchQueue.main.async {
+            ApplicationRunLoop.perform { [weak self, weak reader] in
                 guard let self, let reader, self.httpsReader === reader else { return }
                 self.httpsMonitoringError = message
             }
@@ -144,6 +145,7 @@ final class PacketCaptureManager {
         packetAccumulator.reset()
         packetTextOffset = 0
         lastError = nil
+        stopRequested = false
         state = .authorizing
 
         do {
@@ -215,7 +217,7 @@ final class PacketCaptureManager {
                     process.waitUntilExit()
                     let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
                     let errorText = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                    DispatchQueue.main.async {
+                    ApplicationRunLoop.perform { [weak self] in
                         guard let self, self.directory == folder else { return }
                         let response = output.trimmingCharacters(in: .whitespacesAndNewlines)
                         let startParts = response.split(separator: ":", maxSplits: 2)
@@ -240,10 +242,11 @@ final class PacketCaptureManager {
                         self.timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                             self?.refresh()
                         }
-                        self.refresh()
+                        if let timer = self.timer { RunLoop.main.add(timer, forMode: .modalPanel) }
+                        if self.stopRequested { self.stop() } else { self.refresh() }
                     }
                 } catch {
-                    DispatchQueue.main.async {
+                    ApplicationRunLoop.perform { [weak self] in
                         guard let self else { return }
                         self.state = .failed
                         self.lastError = error.localizedDescription
@@ -257,12 +260,24 @@ final class PacketCaptureManager {
     }
 
     func stop() {
-        guard state == .capturing, let pid = capturePID else { return }
+        guard isBusy else { return }
+        stopRequested = true
+        guard let pid = capturePID else { return }
+        var executable = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &executable, UInt32(executable.count)) > 0,
+              String(cString: executable) == "/usr/sbin/tcpdump" else {
+            timer?.invalidate()
+            timer = nil
+            capturePID = nil
+            state = captureFile() == nil ? .failed : .completed
+            lastError = "抓包进程已退出或身份已变化，未发送停止信号"
+            readCapturedPackets()
+            return
+        }
         if kill(pid, SIGINT) == 0 {
             state = .stopping
         } else {
             lastError = "停止抓包失败：进程尚未降权或已退出"
-            refresh()
         }
     }
 
@@ -346,7 +361,7 @@ final class PacketCaptureManager {
                 defer { try? file.close() }
                 try file.seek(toOffset: offset)
                 let data = try file.read(upToCount: 256 * 1024) ?? Data()
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     guard let self else { return }
                     self.readingPackets = false
                     guard self.packetTextLog == source else { return }
@@ -361,7 +376,7 @@ final class PacketCaptureManager {
                     }
                 }
             } catch {
-                DispatchQueue.main.async {
+                ApplicationRunLoop.perform { [weak self] in
                     self?.readingPackets = false
                     self?.lastError = error.localizedDescription
                 }

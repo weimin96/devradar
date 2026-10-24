@@ -3,134 +3,9 @@ import Foundation
 import Observation
 import UserNotifications
 
-struct ProcessTraffic: Identifiable, Hashable {
-    let pid: Int
-    let processName: String
-    let downloadBytesPerSecond: Int
-    let uploadBytesPerSecond: Int
-    let downloadedDeltaBytes: UInt64
-    let uploadedDeltaBytes: UInt64
-    let downloadedBytes: UInt64
-    let uploadedBytes: UInt64
-    let directory: String?
-    let projectDirectory: String?
-    let executablePath: String?
-    let command: String?
-    let launchSourceName: String?
-    let launchSourceBundlePath: String?
-    let launchSourceBundleIdentifier: String?
-    let connectionCount: Int
-    let remoteEndpoints: [RemoteEndpoint]
-
-    var id: Int { pid }
-
-    var projectName: String? {
-        guard let projectDirectory else { return nil }
-        let url = URL(fileURLWithPath: projectDirectory)
-        let name = url.lastPathComponent
-        if name.first?.isNumber == true, name.contains(".") {
-            let parentName = url.deletingLastPathComponent().lastPathComponent
-            if !parentName.isEmpty {
-                return parentName
-            }
-        }
-        return name
-    }
-}
-
-struct RemoteEndpoint: Identifiable, Hashable {
-    let transport: String
-    let address: String
-    let state: String?
-
-    var id: String { "\(transport):\(address):\(state ?? "")" }
-
-    var isLocal: Bool {
-        let value = host.lowercased()
-        return value.hasPrefix("127.") || value == "::1" || value == "localhost"
-    }
-
-    var scopeLabel: String? {
-        if isLocal { return "本机" }
-        if isPrivateNetwork { return "局域网" }
-        return nil
-    }
-
-    private var host: String {
-        if address.hasPrefix("["), let closing = address.firstIndex(of: "]") {
-            return String(address[address.index(after: address.startIndex)..<closing])
-        }
-        guard let colon = address.lastIndex(of: ":") else { return address }
-        return String(address[..<colon])
-    }
-
-    private var isPrivateNetwork: Bool {
-        if host.hasPrefix("10.") || host.hasPrefix("192.168.") { return true }
-        guard host.hasPrefix("172."),
-              let second = Int(host.split(separator: ".").dropFirst().first ?? "") else {
-            return false
-        }
-        return (16...31).contains(second)
-    }
-}
-
-struct ApplicationTraffic: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let bundlePath: String?
-    let bundleIdentifier: String?
-    let launchSourceName: String?
-    let processNames: [String]
-    let pids: [Int]
-    let downloadBytesPerSecond: Int
-    let uploadBytesPerSecond: Int
-    let downloadedBytes: UInt64
-    let uploadedBytes: UInt64
-    let projectDirectories: [String]
-    let workingDirectories: [String]
-    let connectionCount: Int
-    let remoteEndpoints: [RemoteEndpoint]
-
-    var processCount: Int { pids.count }
-}
-
-struct TrafficTotals: Codable, Hashable {
-    var downloadedBytes: UInt64 = 0
-    var uploadedBytes: UInt64 = 0
-
-    static let zero = TrafficTotals()
-}
-
-struct HistoricalApplicationTraffic: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let bundlePath: String?
-    let bundleIdentifier: String?
-    let launchSourceName: String?
-    let totals: TrafficTotals
-}
-
-struct OpenProjectFile: Identifiable, Hashable {
-    let pid: Int
-    let processName: String
-    let path: String
-    let projectDirectory: String?
-
-    var id: String { "\(pid):\(path)" }
-
-    var fileName: String {
-        URL(fileURLWithPath: path).lastPathComponent
-    }
-}
-
 private struct ConnectionSnapshot {
     let count: Int
     let endpoints: [RemoteEndpoint]
-}
-
-private struct TrafficHistorySnapshot {
-    let applications: [HistoricalApplicationTraffic]
-    let totals: TrafficTotals
 }
 
 private struct ProcessOrigin {
@@ -161,7 +36,14 @@ final class NetworkTrafficMonitor {
     private let sampleInterval = 2
     private let activityRetention: TimeInterval = 300
     private let historyStore = NetworkTrafficHistoryStore()
+    private let historyQueue = DispatchQueue(label: "devradar.network.history", qos: .utility)
+    private var historyError: String?
+    private var isClearingHistory = false
+    private var generation = UUID()
     private var reader: NettopTrafficReader?
+    private var externalReader: NettopTrafficReader?
+    private var uploadMonitoringError: String?
+    private var analysisInspectedAt: Date?
     private var directoryCache: [Int: String] = [:]
     private var resolvedDirectoryPIDs = Set<Int>()
     private var executablePathCache: [Int: String] = [:]
@@ -188,34 +70,87 @@ final class NetworkTrafficMonitor {
     func start() {
         guard reader == nil else { return }
 
+        let session = UUID()
+        generation = session
         let reader = NettopTrafficReader(interval: sampleInterval)
         reader.onFrame = { [weak self] lines in
-            self?.handleFrame(lines)
+            self?.handleFrame(lines, session: session)
         }
         reader.onFailure = { [weak self] message in
             DispatchQueue.main.async {
-                self?.lastError = message
-                self?.isRunning = false
+                guard let self, self.generation == session else { return }
+                self.lastError = message
+                self.isRunning = false
+            }
+        }
+        let externalReader = NettopTrafficReader(interval: sampleInterval, externalOnly: true)
+        externalReader.onFrame = { [weak self] lines in self?.handleExternalFrame(lines, session: session) }
+        externalReader.onFailure = { [weak self] message in
+            DispatchQueue.main.async {
+                guard let self, self.generation == session else { return }
+                self.uploadMonitoringError = message
+                self.lastError = message
+                self.highUploadFramesByApplicationID.removeAll(keepingCapacity: true)
             }
         }
         self.reader = reader
+        self.externalReader = externalReader
         isRunning = true
         reader.start()
+        externalReader.start()
     }
 
-    func stop() {
+    func stop(completion: @escaping (Bool) -> Void) {
+        generation = UUID()
         reader?.stop()
         reader = nil
+        externalReader?.stop()
+        externalReader = nil
         isRunning = false
+        highUploadFramesByApplicationID.removeAll(keepingCapacity: true)
         automaticHTTPSEvidence.stopAll()
+        historyQueue.async { [self] in
+            let result = Result { try self.historyStore.flush() }
+            ApplicationRunLoop.perform {
+                switch result {
+                case .success: completion(true)
+                case .failure(let error):
+                    self.historyError = "网络记录保存失败：\(error.localizedDescription)"
+                    self.lastError = self.historyError
+                    completion(false)
+                }
+            }
+        }
     }
 
     func clearTrafficHistory() {
+        guard !isClearingHistory else { return }
+        guard automaticHTTPSEvidence.clearSavedRecords() else {
+            lastError = automaticHTTPSEvidence.lastError
+            return
+        }
+        isClearingHistory = true
+        historyQueue.async { [self] in
+            let result = Result { try self.historyStore.clear() }
+            DispatchQueue.main.async {
+                self.isClearingHistory = false
+                switch result {
+                case .success:
+                    self.historyError = nil
+                    self.lastError = self.uploadMonitoringError ?? self.historyError ?? self.automaticHTTPSEvidence.lastError
+                    self.resetTrafficHistory()
+                case .failure(let error):
+                    self.historyError = "网络记录清空失败：\(error.localizedDescription)"
+                    self.lastError = self.historyError
+                }
+            }
+        }
+    }
+
+    private func resetTrafficHistory() {
         uploadAnalysis.removeAll()
-        automaticHTTPSEvidence.clearSavedRecords()
         cumulativeByPID.removeAll(keepingCapacity: true)
         cumulativeByApplicationID.removeAll(keepingCapacity: true)
-        historyStore.clear()
 
         processes = processes.map { process in
             ProcessTraffic(
@@ -274,7 +209,66 @@ final class NetworkTrafficMonitor {
         }
     }
 
-    private func handleFrame(_ lines: [String]) {
+    private func handleExternalFrame(_ lines: [String], session: UUID) {
+        let externalUploadRates: [Int: Int]
+        do {
+            externalUploadRates = try NettopUploadRates.parse(lines, interval: sampleInterval)
+        } catch {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == session else { return }
+                self.uploadMonitoringError = error.localizedDescription
+                self.lastError = error.localizedDescription
+                self.highUploadFramesByApplicationID.removeAll(keepingCapacity: true)
+            }
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.generation == session, self.isRunning else { return }
+            self.uploadMonitoringError = nil
+            let now = Date()
+            let activeIDs = Set(self.applications.map(\.id))
+            self.uploadAnalysis = self.uploadAnalysis.filter { id, buffer in
+                activeIDs.contains(id) ||
+                    buffer.incidents.contains { now.timeIntervalSince($0.triggeredAt) <= 1800 }
+            }
+            for application in self.applications {
+                var app = application
+                app.uploadBytesPerSecond = app.pids.reduce(0) { $0 + (externalUploadRates[$1] ?? 0) }
+                var buffer = self.uploadAnalysis[app.id] ?? TrafficAnalysisBuffer()
+                let previousSpikeID = buffer.incidents.last?.id
+                buffer.append(
+                    at: now,
+                    upload: app.uploadBytesPerSecond,
+                    download: app.downloadBytesPerSecond,
+                    applicationName: app.name,
+                    observedPIDs: app.pids,
+                    connectionSnapshot: self.analysisInspectedAt.map { observedAt in
+                        EvidenceConnectionSnapshot(
+                            capturedAt: observedAt,
+                            endpoints: Array(app.remoteEndpoints.filter { !$0.isLocal }
+                                .prefix(24).map {
+                                    EvidenceEndpoint(
+                                        address: $0.address,
+                                        transport: $0.transport,
+                                        state: $0.state
+                                    )
+                                })
+                        )
+                    }
+                )
+                self.uploadAnalysis[app.id] = buffer
+                self.automaticHTTPSEvidence.observe(
+                    application: app,
+                    newlyDetectedSpike: previousSpikeID != buffer.incidents.last?.id &&
+                        buffer.incidents.last?.triggeredAt == now,
+                    at: now
+                )
+            }
+            self.evaluateNetworkAlerts(externalUploadRates: externalUploadRates)
+        }
+    }
+
+    private func handleFrame(_ lines: [String], session: UUID) {
         var ratesByPID: [Int: (name: String, download: Int, upload: Int, downloadDelta: Int, uploadDelta: Int)] = [:]
 
         for line in lines {
@@ -426,49 +420,25 @@ final class NetworkTrafficMonitor {
         // actual socket observation time and never call an old snapshot new.
         let inspectedAt = inspectConnections ? lastConnectionInspectionAt : nil
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, self.generation == session else { return }
             self.processes = snapshots
             var applicationTotals = self.cumulativeByApplicationID
             self.applications = Self.aggregateApplications(snapshots, cumulativeTotals: &applicationTotals)
-            let activeIDs = Set(self.applications.map(\.id))
-            self.uploadAnalysis = self.uploadAnalysis.filter { id, buffer in
-                activeIDs.contains(id) ||
-                    buffer.incidents.contains { now.timeIntervalSince($0.triggeredAt) <= 1800 }
-            }
-            for app in self.applications {
-                var buffer = self.uploadAnalysis[app.id] ?? TrafficAnalysisBuffer()
-                let previousSpikeID = buffer.incidents.last?.id
-                buffer.append(
-                    at: now,
-                    upload: app.uploadBytesPerSecond,
-                    download: app.downloadBytesPerSecond,
-                    applicationName: app.name,
-                    observedPIDs: app.pids,
-                    connectionSnapshot: inspectedAt.map { observedAt in
-                        EvidenceConnectionSnapshot(
-                            capturedAt: observedAt,
-                            endpoints: Array(app.remoteEndpoints.filter { !$0.isLocal }
-                                .prefix(24).map {
-                                    EvidenceEndpoint(
-                                        address: $0.address,
-                                        transport: $0.transport,
-                                        state: $0.state
-                                    )
-                                })
-                        )
-                    }
-                )
-                self.uploadAnalysis[app.id] = buffer
-                self.automaticHTTPSEvidence.observe(
-                    application: app,
-                    newlyDetectedSpike: previousSpikeID != buffer.incidents.last?.id &&
-                        buffer.incidents.last?.triggeredAt == now,
-                    at: now
-                )
-            }
+            self.analysisInspectedAt = inspectedAt
             self.cumulativeByApplicationID = applicationTotals
-            self.evaluateNetworkAlerts()
-            self.historyStore.record(applications: self.applications)
+            if !self.isClearingHistory {
+                let applications = self.applications
+                self.historyQueue.async { [self] in
+                    let result = Result { try self.historyStore.record(applications: applications) }
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success: self.historyError = nil
+                        case .failure(let error): self.historyError = "网络记录保存失败：\(error.localizedDescription)"
+                        }
+                        self.lastError = self.uploadMonitoringError ?? self.historyError ?? self.automaticHTTPSEvidence.lastError
+                    }
+                }
+            }
             let now = Date()
             if now.timeIntervalSince(self.lastHistoryRefreshAt) >= 10 {
                 self.refreshHistorySnapshots()
@@ -476,7 +446,7 @@ final class NetworkTrafficMonitor {
             }
             self.totalDownloadBytesPerSecond = totalDownload
             self.totalUploadBytesPerSecond = totalUpload
-            self.lastError = nil
+            self.lastError = self.uploadMonitoringError ?? self.historyError ?? self.automaticHTTPSEvidence.lastError
             self.isRunning = true
         }
     }
@@ -486,7 +456,7 @@ final class NetworkTrafficMonitor {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    private func evaluateNetworkAlerts() {
+    private func evaluateNetworkAlerts(externalUploadRates: [Int: Int]) {
         let defaults = UserDefaults.standard
         let enabled = defaults.object(forKey: "networkAlertEnabled") as? Bool ?? true
         guard enabled else {
@@ -508,7 +478,8 @@ final class NetworkTrafficMonitor {
                 continue
             }
 
-            if application.uploadBytesPerSecond >= thresholdBytesPerSecond {
+            let uploadRate = application.pids.reduce(0) { $0 + (externalUploadRates[$1] ?? 0) }
+            if uploadRate >= thresholdBytesPerSecond {
                 let frames = (highUploadFramesByApplicationID[application.id] ?? 0) + 1
                 highUploadFramesByApplicationID[application.id] = frames
                 guard frames >= 2 else { continue }
@@ -519,18 +490,18 @@ final class NetworkTrafficMonitor {
                     continue
                 }
                 lastNetworkAlertAtByApplicationID[application.id] = now
-                deliverNetworkAlert(application, thresholdMBps: thresholdMBps)
+                deliverNetworkAlert(application, uploadRate: uploadRate, thresholdMBps: thresholdMBps)
             } else {
                 highUploadFramesByApplicationID[application.id] = 0
             }
         }
     }
 
-    private func deliverNetworkAlert(_ application: ApplicationTraffic, thresholdMBps: Double) {
+    private func deliverNetworkAlert(_ application: ApplicationTraffic, uploadRate: Int, thresholdMBps: Double) {
         let center = UNUserNotificationCenter.current()
         let content = UNMutableNotificationContent()
         content.title = "异常上传提醒"
-        let rate = Double(application.uploadBytesPerSecond) / 1_024 / 1_024
+        let rate = Double(uploadRate) / 1_024 / 1_024
         content.body = String(
             format: "%@ 持续上传 %.1f MB/s，超过 %.0f MB/s 阈值",
             application.name,
@@ -559,15 +530,21 @@ final class NetworkTrafficMonitor {
     }
 
     private func refreshHistorySnapshots() {
-        let oneDay = historyStore.snapshot(days: 1)
-        let threeDays = historyStore.snapshot(days: 3)
-        let sevenDays = historyStore.snapshot(days: 7)
-        history1DayApplications = oneDay.applications
-        history3DayApplications = threeDays.applications
-        history7DayApplications = sevenDays.applications
-        history1DayTotals = oneDay.totals
-        history3DayTotals = threeDays.totals
-        history7DayTotals = sevenDays.totals
+        historyQueue.async { [self] in
+            let oneDay = historyStore.snapshot(days: 1)
+            let threeDays = historyStore.snapshot(days: 3)
+            let sevenDays = historyStore.snapshot(days: 7)
+            let loadError = historyStore.loadError.map { "网络记录读取失败：\($0.localizedDescription)" }
+            DispatchQueue.main.async {
+                self.history1DayApplications = oneDay.applications
+                self.history3DayApplications = threeDays.applications
+                self.history7DayApplications = sevenDays.applications
+                self.history1DayTotals = oneDay.totals
+                self.history3DayTotals = threeDays.totals
+                self.history7DayTotals = sevenDays.totals
+                if let loadError { self.historyError = loadError; self.lastError = loadError }
+            }
+        }
     }
 
     private static func aggregateApplications(
@@ -909,7 +886,7 @@ final class NetworkTrafficMonitor {
         guard columns.count >= 3 else { return nil }
 
         let processField = String(columns[0]).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !processField.isEmpty, processField != "" else { return nil }
+        guard !processField.isEmpty, !processField.contains("<->") else { return nil }
 
         let processParts = processField.split(separator: ".", omittingEmptySubsequences: false)
         guard processParts.count >= 2,
@@ -1108,217 +1085,12 @@ final class NetworkTrafficMonitor {
     }
 }
 
-private final class NetworkTrafficHistoryStore {
-    private struct Bucket: Codable {
-        let appID: String
-        var name: String
-        var bundlePath: String?
-        var bundleIdentifier: String?
-        var launchSourceName: String?
-        let hourStart: TimeInterval
-        var downloadedBytes: UInt64
-        var uploadedBytes: UInt64
-    }
-
-    private struct Payload: Codable {
-        var buckets: [Bucket]
-    }
-
-    private let retention: TimeInterval = 8 * 24 * 60 * 60
-    private let saveInterval: TimeInterval = 20
-    private var bucketsByKey: [String: Bucket] = [:]
-    private var lastObservedSessionTotals: [String: TrafficTotals] = [:]
-    private var lastSaveAt = Date.distantPast
-
-    init() {
-        migrateLegacyStoreIfNeeded()
-        load()
-        prune(now: Date())
-    }
-
-    func record(applications: [ApplicationTraffic]) {
-        let now = Date()
-        // 15-minute buckets keep 1/3/7-day rolling totals reasonably precise
-        // without turning the tiny local history file into a per-sample log.
-        let hourStart = floor(now.timeIntervalSince1970 / 900) * 900
-
-        for app in applications {
-            let current = TrafficTotals(
-                downloadedBytes: app.downloadedBytes,
-                uploadedBytes: app.uploadedBytes
-            )
-            let previous = lastObservedSessionTotals[app.id] ?? .zero
-            let downloadedDelta = current.downloadedBytes >= previous.downloadedBytes
-                ? current.downloadedBytes - previous.downloadedBytes
-                : current.downloadedBytes
-            let uploadedDelta = current.uploadedBytes >= previous.uploadedBytes
-                ? current.uploadedBytes - previous.uploadedBytes
-                : current.uploadedBytes
-            lastObservedSessionTotals[app.id] = current
-
-            guard downloadedDelta > 0 || uploadedDelta > 0 else { continue }
-
-            let key = "\(app.id)|\(Int(hourStart))"
-            if var bucket = bucketsByKey[key] {
-                bucket.name = app.name
-                bucket.bundlePath = app.bundlePath
-                bucket.bundleIdentifier = app.bundleIdentifier
-                bucket.launchSourceName = app.launchSourceName
-                bucket.downloadedBytes += downloadedDelta
-                bucket.uploadedBytes += uploadedDelta
-                bucketsByKey[key] = bucket
-            } else {
-                bucketsByKey[key] = Bucket(
-                    appID: app.id,
-                    name: app.name,
-                    bundlePath: app.bundlePath,
-                    bundleIdentifier: app.bundleIdentifier,
-                    launchSourceName: app.launchSourceName,
-                    hourStart: hourStart,
-                    downloadedBytes: downloadedDelta,
-                    uploadedBytes: uploadedDelta
-                )
-            }
-        }
-
-        if now.timeIntervalSince(lastSaveAt) >= saveInterval {
-            prune(now: now)
-            save()
-            lastSaveAt = now
-        }
-    }
-
-    func snapshot(days: Int) -> TrafficHistorySnapshot {
-        let cutoff = Date().addingTimeInterval(-TimeInterval(days) * 24 * 60 * 60).timeIntervalSince1970
-        let matching = bucketsByKey.values.filter { $0.hourStart >= cutoff }
-        var grouped: [String: (
-            name: String,
-            bundlePath: String?,
-            bundleIdentifier: String?,
-            launchSourceName: String?,
-            totals: TrafficTotals
-        )] = [:]
-
-        for bucket in matching {
-            var entry = grouped[bucket.appID] ?? (
-                bucket.name,
-                bucket.bundlePath,
-                bucket.bundleIdentifier,
-                bucket.launchSourceName,
-                .zero
-            )
-            entry.name = bucket.name
-            entry.bundlePath = bucket.bundlePath
-            entry.bundleIdentifier = bucket.bundleIdentifier
-            entry.launchSourceName = bucket.launchSourceName
-            entry.totals.downloadedBytes += bucket.downloadedBytes
-            entry.totals.uploadedBytes += bucket.uploadedBytes
-            grouped[bucket.appID] = entry
-        }
-
-        let applications = grouped.map { id, value in
-            HistoricalApplicationTraffic(
-                id: id,
-                name: value.name,
-                bundlePath: value.bundlePath,
-                bundleIdentifier: value.bundleIdentifier,
-                launchSourceName: value.launchSourceName,
-                totals: value.totals
-            )
-        }
-        .sorted { lhs, rhs in
-            if lhs.totals.uploadedBytes != rhs.totals.uploadedBytes {
-                return lhs.totals.uploadedBytes > rhs.totals.uploadedBytes
-            }
-            if lhs.totals.downloadedBytes != rhs.totals.downloadedBytes {
-                return lhs.totals.downloadedBytes > rhs.totals.downloadedBytes
-            }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
-
-        let totals = applications.reduce(into: TrafficTotals.zero) { partial, app in
-            partial.downloadedBytes += app.totals.downloadedBytes
-            partial.uploadedBytes += app.totals.uploadedBytes
-        }
-        return TrafficHistorySnapshot(applications: applications, totals: totals)
-    }
-
-    func clear() {
-        bucketsByKey.removeAll(keepingCapacity: false)
-        lastObservedSessionTotals.removeAll(keepingCapacity: false)
-        lastSaveAt = Date()
-        try? FileManager.default.removeItem(at: storageURL)
-    }
-
-    private func prune(now: Date) {
-        let cutoff = now.addingTimeInterval(-retention).timeIntervalSince1970
-        bucketsByKey = bucketsByKey.filter { $0.value.hourStart >= cutoff }
-    }
-
-    private func load() {
-        guard let data = try? Data(contentsOf: storageURL),
-              let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
-            return
-        }
-        bucketsByKey = Dictionary(uniqueKeysWithValues: payload.buckets.map { bucket in
-            ("\(bucket.appID)|\(Int(bucket.hourStart))", bucket)
-        })
-    }
-
-    private func save() {
-        let payload = Payload(buckets: Array(bucketsByKey.values))
-        guard let data = try? JSONEncoder().encode(payload) else { return }
-        let directory = storageURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: storageURL, options: [.atomic])
-    }
-
-    private func migrateLegacyStoreIfNeeded() {
-        let fileManager = FileManager.default
-        guard !fileManager.fileExists(atPath: storageURL.path),
-              fileManager.fileExists(atPath: legacyStorageURL.path) else {
-            return
-        }
-
-        do {
-            try fileManager.createDirectory(
-                at: storageURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try fileManager.moveItem(at: legacyStorageURL, to: storageURL)
-
-            let legacyDirectory = legacyStorageURL.deletingLastPathComponent()
-            if (try? fileManager.contentsOfDirectory(atPath: legacyDirectory.path).isEmpty) == true {
-                try? fileManager.removeItem(at: legacyDirectory)
-            }
-        } catch {
-            // Migration is best-effort. A failed move must never prevent monitoring from starting.
-        }
-    }
-
-    private var storageURL: URL {
-        applicationSupportURL
-            .appendingPathComponent("DevRadar", isDirectory: true)
-            .appendingPathComponent("network-history.json")
-    }
-
-    private var legacyStorageURL: URL {
-        applicationSupportURL
-            .appendingPathComponent("pscan", isDirectory: true)
-            .appendingPathComponent("network-history.json")
-    }
-
-    private var applicationSupportURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-    }
-}
-
 private final class NettopTrafficReader {
     var onFrame: (([String]) -> Void)?
     var onFailure: ((String) -> Void)?
 
     private let interval: Int
+    private let externalOnly: Bool
     private let queue = DispatchQueue(label: "devradar.network.nettop", qos: .utility)
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -1330,8 +1102,9 @@ private final class NettopTrafficReader {
     private var droppedFirstFrame = false
     private var shouldRun = false
 
-    init(interval: Int) {
+    init(interval: Int, externalOnly: Bool = false) {
         self.interval = interval
+        self.externalOnly = externalOnly
     }
 
     func start() {
@@ -1358,16 +1131,8 @@ private final class NettopTrafficReader {
     private func spawn() {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/script")
-        task.arguments = [
-            "-q", "/dev/null",
-            "/usr/bin/nettop",
-            "-P",
-            "-d",
-            "-L", "0",
-            "-J", "bytes_in,bytes_out",
-            "-s", "\(interval)",
-            "-c",
-        ]
+        task.arguments = ["-q", "/dev/null", "/usr/bin/nettop"] +
+            NettopUploadRates.arguments(interval: interval, externalOnly: externalOnly)
 
         let stdin = Pipe()
         let stdout = Pipe()

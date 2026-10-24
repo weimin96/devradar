@@ -20,6 +20,7 @@ public struct PortInfo: Identifiable, Hashable, Sendable {
     public let cpuPercent: Double?
     public let memoryBytes: UInt64?
     public let uptimeSeconds: Int?
+    public var processIdentity: ProcessIdentity? = nil
 
     public var isDevelopmentService: Bool {
         projectDirectory != nil || containerID != nil
@@ -64,6 +65,22 @@ public struct PortInfo: Identifiable, Hashable, Sendable {
             return "Ruby"
         }
         return processName
+    }
+}
+
+public struct ProcessIdentity: Hashable, Sendable {
+    let executable: String
+    let startedAtSeconds: UInt64
+    let startedAtMicroseconds: UInt64
+
+    static func read(pid: Int) -> Self? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(Int32(pid), PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        var path = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(Int32(pid), &path, UInt32(path.count)) > 0 else { return nil }
+        return Self(executable: String(cString: path), startedAtSeconds: info.pbi_start_tvsec,
+                    startedAtMicroseconds: info.pbi_start_tvusec)
     }
 }
 
@@ -236,7 +253,8 @@ public final class PortScanner: @unchecked Sendable {
                     composeService: nil,
                     cpuPercent: snapshot?.cpuPercent,
                     memoryBytes: snapshot?.memoryBytes,
-                    uptimeSeconds: snapshot?.uptimeSeconds
+                    uptimeSeconds: snapshot?.uptimeSeconds,
+                    processIdentity: ProcessIdentity.read(pid: raw.pid)
                 )
             }
 
@@ -290,7 +308,23 @@ public final class PortScanner: @unchecked Sendable {
             throw PortScannerError.commandFailed("没有可停止的宿主进程")
         }
 
+        guard let identity = port.processIdentity,
+              ProcessIdentity.read(pid: port.pid) == identity,
+              port.executable == identity.executable else {
+            throw PortScannerError.commandFailed("进程身份已变化或无法验证，请刷新端口列表")
+        }
+        let listening = Self.runCommand(executableURL: URL(fileURLWithPath: "/usr/sbin/lsof"),
+            arguments: ["-a", "-p", String(port.pid), "-iTCP:\(port.port)", "-sTCP:LISTEN", "-n", "-P", "-Fp"])
+        guard listening.status == 0,
+              listening.output.components(separatedBy: .newlines).contains("p\(port.pid)"),
+              ProcessIdentity.read(pid: port.pid) == identity else {
+            throw PortScannerError.commandFailed("端口归属已变化或无法验证，请刷新端口列表")
+        }
+
         if let pm2 = Self.pm2Process(for: port) {
+            guard ProcessIdentity.read(pid: port.pid) == identity else {
+                throw PortScannerError.commandFailed("进程身份已变化，请刷新端口列表")
+            }
             try Self.stopPM2Process(pm2, port: port)
             return
         }
@@ -301,6 +335,9 @@ public final class PortScanner: @unchecked Sendable {
 
         let managedRootPID = Self.managedTreeRoot(for: port)
         let respawningSupervisorPID = Self.nodemonSupervisorPID(for: port)
+        guard ProcessIdentity.read(pid: port.pid) == identity else {
+            throw PortScannerError.commandFailed("进程身份已变化，请刷新端口列表")
+        }
         switch mode {
         case .terminate:
             if let respawningSupervisorPID {
@@ -677,21 +714,13 @@ public final class PortScanner: @unchecked Sendable {
         arguments: [String],
         environment: [String: String]? = nil
     ) -> (status: Int32, output: String) {
-        let task = Process()
-        let pipe = Pipe()
-        task.executableURL = executableURL
-        task.arguments = arguments
-        task.standardOutput = pipe
-        task.standardError = pipe
-        if let environment {
-            task.environment = environment
-        }
-
         do {
-            try task.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            task.waitUntilExit()
-            return (task.terminationStatus, String(decoding: data, as: UTF8.self))
+            let result = try ProjectCommand.run(executable: executableURL.path, arguments: arguments,
+                directory: "/", environment: environment ?? [:], timeout: 10)
+            if result.timedOut { return (-1, "命令执行超时：\(executableURL.lastPathComponent)") }
+            if result.cancelled { return (-1, "命令已取消") }
+            if result.truncated { return (-1, "命令输出过大，无法完整读取") }
+            return (result.exitCode, String(decoding: result.output + result.errorOutput, as: UTF8.self))
         } catch {
             return (-1, error.localizedDescription)
         }
@@ -949,11 +978,16 @@ public final class PortScanner: @unchecked Sendable {
     }
 
     private static func stopManagedTree(_ rootPID: Int, signal: Int32) throws {
-        let descendants = descendants(of: rootPID)
+        let descendants = descendants(of: rootPID).compactMap { pid in
+            ProcessIdentity.read(pid: pid).map { (pid: pid, identity: $0) }
+        }
+        guard let rootIdentity = ProcessIdentity.read(pid: rootPID) else {
+            throw PortScannerError.processNotFound(rootPID)
+        }
 
         // Stop the supervisor/launcher first so nodemon/npm/pnpm cannot respawn a child
         // while we are tearing down the rest of the tree.
-        if processExists(rootPID) {
+        if ProcessIdentity.read(pid: rootPID) == rootIdentity {
             try send(signal: signal, to: rootPID)
         }
 
@@ -961,7 +995,7 @@ public final class PortScanner: @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.2)
         }
 
-        for pid in descendants.reversed() where processExists(pid) {
+        for (pid, identity) in descendants.reversed() where ProcessIdentity.read(pid: pid) == identity {
             do {
                 try send(signal: signal, to: pid)
             } catch PortScannerError.processNotFound {

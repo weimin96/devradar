@@ -104,7 +104,14 @@ final class LocalProxyManager {
         connectivityResult = nil
         pendingBytes.removeAll()
         httpsDecryptionEnabled = UserDefaults.standard.bool(forKey: "proxyDecryptHTTPS")
-        let existingUpstream = systemProxy.inspectCurrentConnection()
+        state = .starting
+        systemProxy.inspectCurrentConnection { [weak self] upstream in
+            guard let self, self.state == .starting else { return }
+            self.startEngine(executable: executable, existingUpstream: upstream)
+        }
+    }
+
+    private func startEngine(executable: URL, existingUpstream: String?) {
         let task = Process()
         let pipe = Pipe()
         task.executableURL = executable
@@ -204,6 +211,7 @@ final class LocalProxyManager {
         timer?.invalidate()
         timer = nil
         if let process, process.isRunning { process.terminate() }
+        else if state == .starting { state = .stopped }
     }
 
     func clear() {

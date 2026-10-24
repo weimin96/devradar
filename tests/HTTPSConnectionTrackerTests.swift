@@ -61,6 +61,12 @@ struct HTTPSConnectionTrackerTests {
               "UDP QUIC candidate classified cautiously")
         _ = tracker.consume(line: header, at: first.addingTimeInterval(36))
         check(tracker.observed443Connections.count == 1, "stale socket entries aged out")
+        var ipv6 = HTTPSConnectionTracker(pids: [42])
+        _ = ipv6.consume(line: header, at: first)
+        _ = ipv6.consume(line: "application.42,100,200,", at: first)
+        _ = ipv6.consume(line: "tcp6 2001:db8::1.51000<->2001:db8::2.443,100,200,", at: first)
+        _ = ipv6.consume(line: "udp6 2001:db8::1.51001<->2001:db8::3.443,100,200,", at: first)
+        check(ipv6.observed443Connections.count == 2, "系统实际 IPv6 点分端口格式须识别 TCP/UDP 443")
         print("HTTPSConnectionTrackerTests: all tests passed")
     }
 }
