@@ -184,6 +184,30 @@ struct ContentView: View {
                 NetworkMonitorView(trafficMonitor: trafficMonitor, packetCapture: packetCapture, localProxy: localProxy)
             }
 
+            if let error = scanner.lastError {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(error)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button {
+                        scanner.lastError = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("关闭错误提示")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.red.opacity(0.08))
+            }
+
             Divider()
 
             HStack {
@@ -236,19 +260,6 @@ struct ContentView: View {
         .onAppear {
             scanner.startScanning()
             trafficMonitor.start()
-        }
-        .alert(
-            "操作失败",
-            isPresented: Binding(
-                get: { scanner.lastError != nil },
-                set: { if !$0 { scanner.lastError = nil } }
-            )
-        ) {
-            Button("确定", role: .cancel) {
-                scanner.lastError = nil
-            }
-        } message: {
-            Text(scanner.lastError ?? "未知错误")
         }
     }
 

@@ -83,7 +83,8 @@ final class ProjectManager {
         gitStates[project.id] = nil; gitMessages[project.id] = nil
     }
 
-    func remove(_ project: ManagedProject) {
+    @discardableResult
+    func remove(_ project: ManagedProject) -> Bool {
         do {
             guard !loadFailed, !isBusy(project) else { throw ProjectError.message("项目当前不可移除") }
             let updated = projects.filter { $0.id != project.id }
@@ -91,7 +92,11 @@ final class ProjectManager {
             projects = updated
             gitStates[project.id] = nil; gitMessages[project.id] = nil
             runs = runs.filter { $0.value.projectID != project.id }
-        } catch { self.error = error.localizedDescription }
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
     }
 
     func isBusy(_ project: ManagedProject) -> Bool {
@@ -184,6 +189,20 @@ final class ProjectManager {
                 throw ProjectError.message("无法打开项目目录")
             }
         } catch { self.error = error.localizedDescription }
+    }
+
+    func openInVSCode(_ project: ManagedProject) {
+        guard let applicationURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.microsoft.VSCode") else {
+            self.error = "未找到 Visual Studio Code"
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(
+            [URL(fileURLWithPath: project.directory, isDirectory: true)],
+            withApplicationAt: applicationURL,
+            configuration: configuration
+        )
     }
 
     var hasActiveWork: Bool { gitProjectID != nil || runs.values.contains(where: \.active) }

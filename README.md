@@ -193,6 +193,16 @@ open DevRadar.xcodeproj
 
 先安装 Go（brew install go）。在 Xcode 中运行 DevRadar target，构建阶段会把本地代理编译进入 App 资源目录，最终运行时不需要 Go。
 
+### 本地签名
+
+本机已安装 `Local Development Signing` 通用代码签名证书。构建完成后执行：
+
+```bash
+sh scripts/sign-local.sh
+```
+
+脚本会先签名 `devradar-proxy`，再签名整个 App。持续使用同一签名身份，macOS 的「文稿」文件夹授权才能跨版本保留。
+
 ## 开源许可
 
 DevRadar 使用 MIT License。

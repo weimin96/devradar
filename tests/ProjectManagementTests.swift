@@ -47,7 +47,7 @@ struct ProjectManagementTests {
         try synchronization(in: workspace)
         try execution(in: workspace)
         try await lifecycle(in: workspace)
-        print("ProjectManagement: configuration, Git synchronization and process lifecycle passed")
+        print("ProjectManagement: configuration, removal, Git synchronization and process lifecycle passed")
     }
 
     static func configuration(in workspace: URL) throws {
@@ -167,6 +167,12 @@ struct ProjectManagementTests {
         let log = ProjectLog()
         log.append(Data(repeating: 65, count: 150_000))
         try expect(log.text.hasPrefix("仅保留最近") && log.text.count < 132_000, "display log retention is bounded")
+        let staleStore = ProjectStore(url: workspace.appendingPathComponent("失效项目/projects.json"))
+        let staleProject = ManagedProject(name: "目录已失效", directory: workspace.appendingPathComponent("不存在").path)
+        try staleStore.save([staleProject])
+        let staleManager = ProjectManager(store: staleStore)
+        try expect(staleManager.remove(staleProject), "a project with a missing directory must remain removable")
+        try expect(try staleStore.load().isEmpty, "removing a project only deletes its configuration")
         try Data("broken".utf8).write(to: store.url)
         let broken = ProjectManager(store: store)
         try expect(broken.loadFailed, "load failure is exposed")
