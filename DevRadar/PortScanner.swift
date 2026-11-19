@@ -2,7 +2,22 @@ import Darwin
 import Foundation
 
 public struct PortInfo: Identifiable, Hashable, Sendable {
-    public let id = UUID()
+    private static let nodeExecutables: Set<String> = ["node", "nodejs", "npm", "npx", "pnpm", "yarn", "yarnpkg", "bun", "bunx"]
+    private static let frameworkExecutables: Set<String> = [
+        "vite", "vite.js", "vite.mjs", "next", "next.js", "next.mjs",
+        "nuxt", "nuxt.js", "nuxt.mjs", "nuxi", "nuxi.js", "nuxi.mjs",
+    ]
+    private static let javaExecutables: Set<String> = ["java", "javaw", "gradle", "gradlew", "mvn", "mvnw", "maven"]
+
+    // Port scanning replaces the whole collection every few seconds. Keep the
+    // identity tied to the listening endpoint instead of allocating a new UUID
+    // on each scan, so SwiftUI reuses the row and preserves hover/scroll state.
+    public var id: String {
+        if let containerID {
+            return "container:\(containerID):\(port)"
+        }
+        return "pid:\(pid):\(port)"
+    }
     public let port: Int
     public let processName: String
     public let pid: Int
@@ -30,41 +45,77 @@ public struct PortInfo: Identifiable, Hashable, Sendable {
         if containerID != nil {
             return "Docker"
         }
-        let text = "\(processName) \(executable ?? "") \(command ?? "")".lowercased()
-        if serviceName != nil && (text.contains("java") || text.contains("gradle") || text.contains("maven")) {
+
+        let executableName = Self.commandName(executable) ?? commandNames.first ?? processName
+        let normalizedExecutableName = executableName.lowercased()
+        let isNodeProcess = Self.nodeExecutables.contains(normalizedExecutableName)
+        let isNodeToolProcess = isNodeProcess || Self.frameworkExecutables.contains(normalizedExecutableName)
+        let isPythonProcess = normalizedExecutableName.hasPrefix("python")
+        let isJavaProcess = Self.javaExecutables.contains(normalizedExecutableName)
+
+        if serviceName != nil && isJavaProcess {
             return "Spring Boot"
         }
-        if text.contains("vite") {
+
+        if isNodeToolProcess && commandHasName(["vite", "vite.js", "vite.mjs"], executableName: normalizedExecutableName) {
             return "Vite"
         }
-        if text.contains("next dev") || text.contains("/next") {
+        if isNodeToolProcess && commandHasName(["next", "next.js", "next.mjs"], executableName: normalizedExecutableName) {
             return "Next.js"
         }
-        if text.contains("nuxt") {
+        if isNodeToolProcess && commandHasName(
+            ["nuxt", "nuxt.js", "nuxt.mjs", "nuxi", "nuxi.js", "nuxi.mjs"],
+            executableName: normalizedExecutableName
+        ) {
             return "Nuxt"
         }
-        if text.contains("uvicorn") {
+
+        if (isPythonProcess || normalizedExecutableName == "uvicorn"),
+           commandHasName(["uvicorn"], executableName: normalizedExecutableName) {
             return "Uvicorn"
         }
-        if text.contains("gunicorn") {
+        if (isPythonProcess || normalizedExecutableName == "gunicorn"),
+           commandHasName(["gunicorn"], executableName: normalizedExecutableName) {
             return "Gunicorn"
         }
-        if text.contains("flask") {
+        if (isPythonProcess || normalizedExecutableName == "flask"),
+           commandHasName(["flask"], executableName: normalizedExecutableName) {
             return "Flask"
         }
-        if text.contains("java") || text.contains("gradle") || text.contains("maven") {
+
+        if isJavaProcess {
             return "Java"
         }
-        if text.contains("node") || text.contains("npm") || text.contains("pnpm") || text.contains("yarn") || text.contains("bun") {
+        if isNodeProcess {
             return "Node"
         }
-        if text.contains("python") || text.contains("uvicorn") || text.contains("gunicorn") || text.contains("flask") {
+        if isPythonProcess {
             return "Python"
         }
-        if text.contains("ruby") || text.contains("rails") {
+        if normalizedExecutableName == "ruby" || normalizedExecutableName == "rails" {
             return "Ruby"
         }
-        return processName
+        return executableName
+    }
+
+    private var commandNames: [String] {
+        guard let command else { return [] }
+        // Match argument basenames so a parent directory such as ~/.nvm/versions/node
+        // cannot classify an unrelated executable as Node.
+        return command.split(whereSeparator: { $0.isWhitespace }).map { token in
+            Self.commandName(String(token)) ?? String(token).lowercased()
+        }
+    }
+
+    private func commandHasName(_ names: Set<String>, executableName: String) -> Bool {
+        names.contains(executableName) || commandNames.contains { names.contains($0) }
+    }
+
+    private static func commandName(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let token = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        guard !token.isEmpty else { return nil }
+        return URL(fileURLWithPath: token).lastPathComponent.lowercased()
     }
 }
 

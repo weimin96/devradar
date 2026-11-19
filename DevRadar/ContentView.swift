@@ -72,6 +72,9 @@ struct ContentView: View {
     @Binding var showAll: Bool
     @State private var searchText = ""
     @State private var panel = MonitorPanel.ports
+    @State private var stableGroupOrder: [String] = []
+    @State private var isHoveringPortList = false
+    @State private var frozenPortListHeight: CGFloat?
     @AppStorage("groupSortMode") private var groupSortModeRaw = GroupSortMode.name.rawValue
     @AppStorage(IgnoreRules.projectsKey) private var ignoredProjectsRaw = "[]"
     @AppStorage(IgnoreRules.portsKey) private var ignoredPortsRaw = "[]"
@@ -113,8 +116,28 @@ struct ContentView: View {
         }
     }
 
+    private var allGroups: [ServiceGroup] {
+        makeGroups(from: visiblePorts)
+    }
+
     private var groups: [ServiceGroup] {
-        let grouped = Dictionary(grouping: filteredPorts) { port in
+        let candidates = makeGroups(from: filteredPorts)
+        let mode = GroupSortMode(rawValue: groupSortModeRaw) ?? .name
+        guard !stableGroupOrder.isEmpty else {
+            return sortGroups(candidates, mode: mode)
+        }
+
+        let ranks = Dictionary(uniqueKeysWithValues: stableGroupOrder.enumerated().map { ($0.element, $0.offset) })
+        return candidates.sorted { lhs, rhs in
+            let leftRank = ranks[lhs.id] ?? Int.max
+            let rightRank = ranks[rhs.id] ?? Int.max
+            if leftRank != rightRank { return leftRank < rightRank }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func makeGroups(from ports: [PortInfo]) -> [ServiceGroup] {
+        let grouped = Dictionary(grouping: ports) { port in
             if let projectDirectory = port.projectRootDirectory {
                 return projectDirectory
             }
@@ -127,7 +150,7 @@ struct ContentView: View {
             return "pid:\(port.pid)"
         }
 
-        let result = grouped.map { key, ports in
+        return grouped.map { key, ports in
             let sortedPorts = ports.sorted { $0.port < $1.port }
             let first = sortedPorts[0]
             return ServiceGroup(
@@ -137,9 +160,10 @@ struct ContentView: View {
                 ports: sortedPorts
             )
         }
+    }
 
-        let mode = GroupSortMode(rawValue: groupSortModeRaw) ?? .name
-        return result.sorted { lhs, rhs in
+    private func sortGroups(_ groups: [ServiceGroup], mode: GroupSortMode) -> [ServiceGroup] {
+        groups.sorted { lhs, rhs in
             let lhsHasProject = lhs.directory != nil
             let rhsHasProject = rhs.directory != nil
             if lhsHasProject != rhsHasProject {
@@ -164,6 +188,35 @@ struct ContentView: View {
             }
 
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    // Live CPU/memory values change on every scan. Re-sorting the whole list
+    // would move the project out from under the pointer, so keep the visible
+    // order stable and only append newly discovered projects.
+    private func updateStableGroupOrder(forceSort: Bool = false) {
+        let current = allGroups
+        let mode = GroupSortMode(rawValue: groupSortModeRaw) ?? .name
+        if forceSort || stableGroupOrder.isEmpty {
+            stableGroupOrder = sortGroups(current, mode: mode).map(\.id)
+            return
+        }
+
+        let currentIDs = Set(current.map(\.id))
+        let retained = stableGroupOrder.filter { currentIDs.contains($0) }
+        let retainedIDs = Set(retained)
+        let newcomers = sortGroups(current.filter { !retainedIDs.contains($0.id) }, mode: mode).map(\.id)
+        let next = retained + newcomers
+        if next != stableGroupOrder {
+            stableGroupOrder = next
+        }
+    }
+
+    private func selectSortMode(_ mode: GroupSortMode) {
+        if groupSortModeRaw == mode.rawValue {
+            updateStableGroupOrder(forceSort: true)
+        } else {
+            groupSortModeRaw = mode.rawValue
         }
     }
 
@@ -260,6 +313,19 @@ struct ContentView: View {
         .onAppear {
             scanner.startScanning()
             trafficMonitor.start()
+            updateStableGroupOrder(forceSort: true)
+        }
+        .onChange(of: Set(allGroups.map(\.id))) { _, _ in
+            updateStableGroupOrder()
+        }
+        .onChange(of: groupSortModeRaw) { _, _ in
+            updateStableGroupOrder(forceSort: true)
+        }
+        .onChange(of: showAll) { _, _ in
+            updateStableGroupOrder(forceSort: true)
+        }
+        .onChange(of: panel) { _, _ in
+            updateStableGroupOrder(forceSort: true)
         }
     }
 
@@ -300,7 +366,7 @@ struct ContentView: View {
                 Divider()
                 ForEach([GroupSortMode.name, .cpu, .memory, .uptime], id: \.rawValue) { mode in
                     Button {
-                        groupSortModeRaw = mode.rawValue
+                        selectSortMode(mode)
                     } label: {
                         if groupSortModeRaw == mode.rawValue {
                             Label("按\(mode.title)排序", systemImage: "checkmark")
@@ -394,7 +460,19 @@ struct ContentView: View {
                     }
                 }
             }
-            .frame(height: listHeight)
+            // A scan can discover another project at any time. While the
+            // pointer is inside the list, keep the popover from resizing and
+            // moving the row the user is about to click.
+            .frame(height: isHoveringPortList ? (frozenPortListHeight ?? listHeight) : listHeight)
+            .onHover { hovering in
+                if hovering, !isHoveringPortList {
+                    frozenPortListHeight = listHeight
+                }
+                isHoveringPortList = hovering
+                if !hovering {
+                    frozenPortListHeight = nil
+                }
+            }
         }
     }
 }
@@ -497,21 +575,24 @@ private struct ServiceGroupView: View {
                     MetricPill(
                         text: String(format: "%.1f%%", cpu),
                         systemImage: "cpu",
-                        color: cpuColor(cpu)
+                        color: cpuColor(cpu),
+                        minWidth: 58
                     )
                 }
                 if let memory = group.memoryBytes {
                     MetricPill(
                         text: formatBytes(memory),
                         systemImage: "memorychip",
-                        color: memoryColor(memory)
+                        color: memoryColor(memory),
+                        minWidth: 76
                     )
                 }
                 if let uptime = group.uptimeSeconds {
                     MetricPill(
                         text: formatUptime(uptime),
                         systemImage: "clock",
-                        color: .secondary
+                        color: .secondary,
+                        minWidth: 84
                     )
                 }
             }
@@ -570,11 +651,13 @@ private struct MetricPill: View {
     let text: String
     let systemImage: String
     let color: Color
+    var minWidth: CGFloat = 0
 
     var body: some View {
         Label(text, systemImage: systemImage)
             .font(.caption2.monospacedDigit())
             .foregroundStyle(color)
+            .frame(minWidth: minWidth, alignment: .leading)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(color.opacity(0.07))

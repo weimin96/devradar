@@ -64,6 +64,11 @@ struct PortScannerTests {
                 uptimeSeconds: nil, processIdentity: identity)
         }
         let pid = Int(listener.processIdentifier)
+        let firstSnapshot = snapshot(pid: pid, port: number, identity: identity)
+        try check(firstSnapshot.id == snapshot(pid: pid, port: number, identity: identity).id,
+                  "重复扫描同一监听端口时必须保持稳定行标识")
+        try check(firstSnapshot.id != snapshot(pid: pid, port: number == 65535 ? 65534 : number + 1, identity: identity).id,
+                  "不同监听端口必须使用不同行标识")
         let stale = ProcessIdentity(executable: identity.executable, startedAtSeconds: identity.startedAtSeconds + 1,
                                     startedAtMicroseconds: identity.startedAtMicroseconds)
         for port in [snapshot(pid: pid, port: number, identity: nil),
